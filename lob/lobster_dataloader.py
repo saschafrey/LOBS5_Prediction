@@ -6,6 +6,8 @@ import torchvision
 from torch.utils.data import Dataset
 from glob import glob
 import pandas as pd
+import jax.numpy as jnp
+from jax.nn import one_hot
 
 from s5.dataloaders.base import default_data_path, SequenceDataset
 from s5.utils import permutations
@@ -13,10 +15,73 @@ default_data_path = Path(__file__).parent.absolute()
 default_data_path = default_data_path / "data"
 
 
+class LOBSTER_Dataset(Dataset):
+    """ TODO: investigate speed of __getitem__ in practice: currently loads every sequence
+              from pre-processed file, one-hot encodes and moves to GPU
+        TODO: time encoding?
+    """
+
+    EVENT_TYPES = 2
+    ORDER_SIZES = 64
+    PRICES = 23
+
+    def __init__(self, message_files, seq_len) -> None:
+        self.message_files = message_files #
+        self.num_days = len(self.message_files)
+        self.seq_len = seq_len
+        self._seqs_per_file = np.array(
+            [self._get_num_rows(f) - (self.seq_len-1) for f in message_files])
+        # store at which observations files start
+        self._seqs_cumsum = np.concatenate(([0], np.cumsum(self._seqs_per_file)))
+        # count total number of messages once
+        self._len = self._seqs_cumsum[-1]
+
+    def __len__(self):
+        return self._len
+
+    def __getitem__(self, idx):
+        file_idx, seq_idx = self._get_seq_location(idx)
+        #print('getting from file', file_idx, 'item', seq_idx)
+        df = pd.read_csv(
+            self.message_files[file_idx],
+            names = ['time', 'event_type', 'order_id', 'size', 'price', 'direction'],
+            index_col = False,
+            skiprows=seq_idx,
+            nrows=self.seq_len
+        )
+        X = df[['time', 'event_type', 'size', 'price', 'direction']].values
+        X = self._encode_features(X)
+        return X
+    
+    def _encode_features(self, X):
+        return jnp.concatenate(
+            (
+                jnp.array(X[:, 0].reshape((-1,1))),  # leave time as is for now
+                one_hot(X[:, 1], LOBSTER_Dataset.EVENT_TYPES),
+                one_hot(X[:, 2], LOBSTER_Dataset.ORDER_SIZES),
+                one_hot(X[:, 3], LOBSTER_Dataset.PRICES),
+                jnp.array(X[:, 4].reshape((-1,1)))  # direction is already in {0,1}
+            ),
+            axis=1)
+
+    def _get_num_rows(self, file_path):
+        with open(file_path) as f:
+            return sum(1 for line in f)
+
+    def _get_seq_location(self, idx):
+        file_idx = np.searchsorted(self._seqs_cumsum, idx+1) - 1
+        seq_idx = idx - self._seqs_cumsum[file_idx]
+        return file_idx, seq_idx
+
+
 class LOBSTER(SequenceDataset):
     _name_ = "lobster"
-    d_input = 15 # 2+7+6
-    d_output = 15
+    d_input = (
+        LOBSTER_Dataset.EVENT_TYPES
+        + LOBSTER_Dataset.ORDER_SIZES
+        + LOBSTER_Dataset.PRICES
+        + 2)  # direction
+    d_output = d_input
     l_output = 0
     L = 500
 
@@ -76,41 +141,3 @@ class LOBSTER(SequenceDataset):
 
     def __str__(self):
         return f"{'p' if self.permute else 's'}{self._name_}"
-
-
-class LOBSTER_Dataset(Dataset):
-
-    def __init__(self, message_files, seq_len) -> None:
-        self.message_files = message_files #
-        self.num_days = len(self.message_files)
-        self.seq_len = seq_len
-        self._seqs_per_file = np.array(
-            [self._get_num_rows(f) - (self.seq_len-1) for f in message_files])
-        # store at which observations files start
-        self._seqs_cumsum = np.concatenate(([0], np.cumsum(self._seqs_per_file)))
-        # count total number of messages once
-        self._len = self._seqs_cumsum[-1]
-
-    def __len__(self):
-        return self._len
-
-    def __getitem__(self, idx):
-        file_idx, seq_idx = self._get_seq_location(idx)
-        #print('getting from file', file_idx, 'item', seq_idx)
-        df = pd.read_csv(
-            self.message_files[file_idx],
-            names = ['time', 'event_type', 'order_id', 'size', 'price', 'direction'],
-            index_col = False,
-            skiprows=seq_idx,
-            nrows=self.seq_len
-        )
-        return df
-
-    def _get_num_rows(self, file_path):
-        with open(file_path) as f:
-            return sum(1 for line in f)
-
-    def _get_seq_location(self, idx):
-        file_idx = np.searchsorted(self._seqs_cumsum, idx+1) - 1
-        seq_idx = idx - self._seqs_cumsum[file_idx]
-        return file_idx, seq_idx
