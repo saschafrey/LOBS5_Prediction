@@ -2,10 +2,12 @@ from functools import partial
 from jax import random
 import jax.numpy as np
 from jax.scipy.linalg import block_diag
+from flax.training import checkpoints
+import orbax.checkpoint
 from lob.lob_seq_model import BatchLobPredModel
 
 from .dataloading import Datasets
-from s5.train_helpers import create_train_state, reduce_lr_on_plateau,\
+from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
 from s5.ssm import init_S5SSM
 from s5.ssm_init import make_DPLR_HiPPO
@@ -14,7 +16,6 @@ from s5.ssm_init import make_DPLR_HiPPO
 def train(args):
     """
     Main function to train over a certain number of epochs
-    TODO: change training pipeline for LOBSTER data
     """
 
     best_test_loss = 100000000
@@ -36,7 +37,8 @@ def train(args):
     init_rng, train_rng = random.split(key, num=2)
 
     # Get dataset creation function
-    create_dataset_fn = Datasets['lobster-prediction']
+    ds = 'lobster-prediction'
+    create_dataset_fn = Datasets[ds]
 
     # Dataset dependent logic
     padded = False
@@ -48,7 +50,7 @@ def train(args):
     trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
       create_dataset_fn(args.dir_name, seed=args.jax_seed, bsz=args.bsz)
 
-    print(f"[*] Starting S5 Training on `{args.dataset}` =>> Initializing...")
+    print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
 
     # Initialize state matrix A using approximation to HiPPO-LegS matrix
     Lambda, _, B, V, B_orig = make_DPLR_HiPPO(block_size)
@@ -89,7 +91,8 @@ def train(args):
     model_cls = partial(
         BatchLobPredModel,
         ssm=ssm_init_fn,
-        d_output=n_classes,
+        output_dims=n_classes,
+        d_output=int(sum(n_classes)),
         d_model=args.d_model,
         n_layers=args.n_layers,
         padded=padded,
@@ -194,6 +197,28 @@ def train(args):
                 f" Test Accuracy: {val_acc:.4f}"
             )
 
+        # save checkpoint
+        ckpt = {
+            'model': state,
+            'config': vars(args),
+            'metrics': {
+                'loss_train': train_loss,
+                'loss_val': val_loss,
+                'loss_test': test_loss,
+                'acc_val': val_acc,
+                'acc_test': test_acc,
+            }
+        }
+        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        checkpoints.save_checkpoint(
+            ckpt_dir='../checkpoints',
+            target=ckpt,
+            step=epoch,
+            overwrite=True,
+            keep=2,
+            orbax_checkpointer=orbax_checkpointer
+        )
+
         # For early stopping purposes
         if val_loss < best_val_loss:
             count = 0
@@ -210,6 +235,7 @@ def train(args):
             else:
                 best_test_loss, best_test_acc = best_loss, best_acc
 
+            '''
             # Do some validation on improvement.
             if speech:
                 # Evaluate on resolution 2 val and test sets
@@ -230,6 +256,7 @@ def train(args):
                     f" Val Accuracy: {val2_acc:.4f}"
                     f" Test Accuracy: {test2_acc:.4f}"
                 )
+            '''
 
         # For learning rate decay purposes:
         input = lr, ssm_lr, lr_count, val_acc, opt_acc

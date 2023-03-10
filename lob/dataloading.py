@@ -3,10 +3,11 @@ from pathlib import Path
 import os
 from typing import Callable, Optional, TypeVar, Dict, Tuple, List, Union
 from s5.dataloading import make_data_loader
-from lobster_dataloader import LOBSTER
+from .lobster_dataloader import LOBSTER
 
 
 DEFAULT_CACHE_DIR_ROOT = Path('./cache_dir/')
+DATA_DIR = Path('../data/')
 
 DataLoader = TypeVar('DataLoader')
 InputType = [str, Optional[int], Optional[int]]
@@ -16,7 +17,7 @@ ReturnType = Tuple[DataLoader, DataLoader, DataLoader, Dict, int, int, int, int]
 dataset_fn = Callable[[str, Optional[int], Optional[int]], ReturnType]
 
 
-def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DEFAULT_CACHE_DIR_ROOT,
+def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 									  seed: int = 42,
 									  bsz: int=128) -> ReturnType:
 	""" 
@@ -39,7 +40,7 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DEFAULT_CACH
 
 	N_CLASSES = dataset_obj.d_output
 	SEQ_LENGTH = dataset_obj.L
-	IN_DIM = dataset_obj.d_input
+	IN_DIM = int(sum(dataset_obj.d_input))
 	TRAIN_SIZE = len(dataset_obj.dataset_train)
 	aux_loaders = {}
 

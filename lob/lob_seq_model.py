@@ -1,3 +1,4 @@
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -30,6 +31,7 @@ class LobPredModel(nn.Module):
     """
     ssm: nn.Module
     d_output: int
+    output_dims: Tuple[int]  # dimensions of different output classes
     d_model: int
     n_layers: int
     padded: bool

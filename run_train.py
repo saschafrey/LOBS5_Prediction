@@ -1,22 +1,22 @@
 import argparse
 from s5.utils.util import str2bool
-from s5.train import train
-from s5.dataloading import Datasets
+from lob.train import train
+from lob.dataloading import Datasets
 
 if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser()
 
-	parser.add_argument("--USE_WANDB", type=str2bool, default=False,
-						help="log with wandb?")
-	parser.add_argument("--wandb_project", type=str, default=None,
-						help="wandb project name")
-	parser.add_argument("--wandb_entity", type=str, default=None,
-						help="wandb entity name, e.g. username")
-	parser.add_argument("--dir_name", type=str, default='./cache_dir',
+	#parser.add_argument("--USE_WANDB", type=str2bool, default=False,
+	#					help="log with wandb?")
+	#parser.add_argument("--wandb_project", type=str, default=None,
+	#					help="wandb project name")
+	#parser.add_argument("--wandb_entity", type=str, default=None,
+	#					help="wandb entity name, e.g. username")
+	parser.add_argument("--dir_name", type=str, default='./data',
 						help="name of directory where data is cached")
 	parser.add_argument("--dataset", type=str, choices=Datasets.keys(),
-						default='mnist-classification',
+						default='lobster-prediction',
 						help="dataset name")
 
 	# Model Parameters

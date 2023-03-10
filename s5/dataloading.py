@@ -387,6 +387,13 @@ def create_pmnist_classification_dataset(cache_dir: Union[str, Path] = DEFAULT_C
 	return trn_loader, val_loader, tst_loader, aux_loaders, N_CLASSES, SEQ_LENGTH, IN_DIM, TRAIN_SIZE
 
 
+def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DEFAULT_CACHE_DIR_ROOT,
+									  seed: int = 42,
+									  bsz: int=128) -> ReturnType:
+	""" TODO
+	"""
+	pass
+
 Datasets = {
 	# Other loaders.
 	"mnist-classification": create_mnist_classification_dataset,
@@ -403,4 +410,7 @@ Datasets = {
 
 	# Speech.
 	"speech35-classification": create_speechcommands35_classification_dataset,
+
+	# financial data
+	"lobster-prediction": create_lobster_prediction_dataset,
 }
