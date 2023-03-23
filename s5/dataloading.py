@@ -2,6 +2,7 @@ import torch
 from pathlib import Path
 import os
 from typing import Callable, Optional, TypeVar, Dict, Tuple, List, Union
+from torch.utils.data import Sampler
 
 DEFAULT_CACHE_DIR_ROOT = Path('./cache_dir/')
 
@@ -26,7 +27,9 @@ def make_data_loader(dset,
 					 batch_size: int=128,
 					 shuffle: bool=True,
 					 drop_last: bool=True,
-					 collate_fn: callable=None):
+					 collate_fn: callable=None,
+					 sampler: Optional[Sampler]=None,
+					 num_workers: int = 0):
 	"""
 
 	:param dset: 			(PT dset):		PyTorch dataset object.
@@ -49,9 +52,15 @@ def make_data_loader(dset,
 		assert collate_fn is None
 		collate_fn = dobj._collate_fn
 
+	if sampler is not None:
+		shuffle = False
+		drop_last = False
+
+
 	# Generate the dataloaders.
-	return torch.utils.data.DataLoader(dataset=dset, collate_fn=collate_fn, batch_size=batch_size, shuffle=shuffle,
-									   drop_last=drop_last, generator=rng)
+	return torch.utils.data.DataLoader(
+		dataset=dset, collate_fn=collate_fn, batch_size=batch_size, shuffle=shuffle,
+		drop_last=drop_last, generator=rng, sampler=sampler, num_workers=num_workers)
 
 
 def create_lra_imdb_classification_dataset(cache_dir: Union[str, Path] = DEFAULT_CACHE_DIR_ROOT,

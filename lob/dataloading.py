@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 from typing import Callable, Optional, TypeVar, Dict, Tuple, List, Union
 from s5.dataloading import make_data_loader
-from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
+from .lobster_dataloader import LOBSTER, LOBSTER_Dataset, LOBSTER_Sampler
 
 
 DEFAULT_CACHE_DIR_ROOT = Path('./cache_dir/')
@@ -36,9 +36,17 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 	dataset_obj = LOBSTER(name, data_dir=cache_dir, **kwargs)
 	dataset_obj.setup()
 
-	trn_loader = make_data_loader(dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz)
-	val_loader = make_data_loader(dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False)
-	tst_loader = make_data_loader(dataset_obj.dataset_test, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False)
+	# TODO: make arg
+	num_workers = 4
+	trn_sampler = LOBSTER_Sampler(
+		dataset_obj.dataset_train, n_files_shuffle=num_workers, batch_size=bsz, seed=seed)
+	
+	trn_loader = make_data_loader(
+		dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
+	val_loader = make_data_loader(
+		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False, num_workers=num_workers)
+	tst_loader = make_data_loader(
+		dataset_obj.dataset_test, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False, num_workers=num_workers)
 
 	N_CLASSES = dataset_obj.d_output
 	SEQ_LENGTH = dataset_obj.L
