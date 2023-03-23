@@ -2,30 +2,45 @@ import argparse
 from s5.utils.util import str2bool
 from lob.train import train
 from lob.dataloading import Datasets
+import tensorflow as tf
+import os
+
+#physical_devices = tf.config.list_physical_devices('GPU')
+#tf.config.experimental.set_memory_growth(physical_devices[0], True)
+tf.config.experimental.set_visible_devices([], "GPU")
+
+# no GPU use at all
+#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
 
 if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser()
 
-	#parser.add_argument("--USE_WANDB", type=str2bool, default=False,
-	#					help="log with wandb?")
-	#parser.add_argument("--wandb_project", type=str, default=None,
-	#					help="wandb project name")
-	#parser.add_argument("--wandb_entity", type=str, default=None,
-	#					help="wandb entity name, e.g. username")
+	parser.add_argument("--USE_WANDB", type=str2bool, default=True,
+						help="log with wandb?")
+	parser.add_argument("--wandb_project", type=str, default="LOBS5",
+						help="wandb project name")
+	parser.add_argument("--wandb_entity", type=str, default="peer-nagy",
+						help="wandb entity name, e.g. username")
 	parser.add_argument("--dir_name", type=str, default='./data',
 						help="name of directory where data is cached")
 	parser.add_argument("--dataset", type=str, choices=Datasets.keys(),
 						default='lobster-prediction',
 						help="dataset name")
+	parser.add_argument("--masking", type=str, choices={'causal', 'random'},
+						default='random',
+						help="causal or random masking of sequences")
 
 	# Model Parameters
-	parser.add_argument("--n_layers", type=int, default=6,
+	parser.add_argument("--n_layers", type=int, default=2,  #6
 						help="Number of layers in the network")
-	parser.add_argument("--d_model", type=int, default=128,
+	parser.add_argument("--d_model", type=int, default=32,  #128
 						help="Number of features, i.e. H, "
 							 "dimension of layer inputs/outputs")
-	parser.add_argument("--ssm_size_base", type=int, default=256,
+	parser.add_argument("--ssm_size_base", type=int, default=64,  # 256
 						help="SSM Latent size, i.e. P")
 	parser.add_argument("--blocks", type=int, default=8,
 						help="How many blocks, J, to initialize with")
@@ -46,7 +61,7 @@ if __name__ == "__main__":
 						help="whether to enforce conjugate symmetry")
 	parser.add_argument("--clip_eigs", type=str2bool, default=False,
 						help="whether to enforce the left-half plane condition")
-	parser.add_argument("--bidirectional", type=str2bool, default=False,
+	parser.add_argument("--bidirectional", type=str2bool, default=False,  #False,
 						help="whether to use bidirectional model")
 	parser.add_argument("--dt_min", type=float, default=0.001,
 						help="min value to sample initial timescale params from")
@@ -60,9 +75,9 @@ if __name__ == "__main__":
 						help="True: use batchnorm, False: use layernorm")
 	parser.add_argument("--bn_momentum", type=float, default=0.95,
 						help="batchnorm momentum")
-	parser.add_argument("--bsz", type=int, default=64,
+	parser.add_argument("--bsz", type=int, default=16, #64, (max 16 with full size)
 						help="batch size")
-	parser.add_argument("--epochs", type=int, default=100,
+	parser.add_argument("--epochs", type=int, default=20,  #100
 						help="max number of epochs")
 	parser.add_argument("--early_stop_patience", type=int, default=1000,
 						help="number of epochs to continue training when val loss plateaus")

@@ -1,4 +1,5 @@
 from functools import partial
+import numpy as onp
 import jax
 import jax.numpy as np
 from jax.nn import one_hot
@@ -6,6 +7,8 @@ from tqdm import tqdm
 from flax.training import train_state
 import optax
 from typing import Any, Tuple
+
+from lob.lob_seq_model import LobPredModel
 
 
 # LR schedulers
@@ -252,7 +255,8 @@ def create_train_state(model_cls,
 
     fn_is_complex = lambda x: x.dtype in [np.complex64, np.complex128]
     param_sizes = map_nested_fn(lambda k, param: param.size * (2 if fn_is_complex(param) else 1))(params)
-    print(f"[*] Trainable Parameters: {sum(jax.tree_leaves(param_sizes))}")
+    #print(f"[*] Trainable Parameters: {sum(jax.tree_leaves(param_sizes))}")
+    print(f"[*] Trainable Parameters: {sum(jax.tree_util.tree_leaves(param_sizes))}")
 
     if batchnorm:
         class TrainState(train_state.TrainState):
@@ -270,14 +274,16 @@ def get_slices(dims):
         last_i += d
     return slices
 
-
 # Train and eval steps
+#@jax.jit
 @partial(np.vectorize, signature="(c),()->()")
 def cross_entropy_loss(logits, label):
     one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[0])
     return -np.sum(one_hot_label * logits)
+    #return -np.sum(label * logits)
 
 
+'''
 def mse_loss(preds, targets):
     return np.sum((preds - targets)**2)
 
@@ -300,12 +306,18 @@ def weighted_loss(
     slices = get_slices(dims)
     return np.sum(
         [w * loss_fn(outputs[s], targets[s]) for w, loss_fn, s in zip(weights, loss_fns, slices)])
+'''
 
-@partial(np.vectorize, signature="(c),()->()")
-def compute_accuracy(logits, label):
-    return np.argmax(logits) == label
+#@partial(np.vectorize, signature="(c),()->()")
+#def compute_accuracy(logits, label):
+#    return np.argmax(logits) == label
 
+@jax.jit
+def compute_accuracy(logits, dummy_labels):
+    bool_idx = np.arange(logits.shape[0]), np.argmax(logits, axis=1)
+    return dummy_labels[bool_idx] == 1
 
+'''
 def weighted_accuracy_and_rmse(
     outputs,
     targets,
@@ -317,7 +329,7 @@ def weighted_accuracy_and_rmse(
         [w * compute_accuracy(outputs[s], targets[s]) for w, s in zip(acc_weights, slices[:-1])])
     rmse = rmse_loss(outputs[slices[-1]], targets[slices[-1]])
     return acc, rmse
-
+'''
 
 def prep_batch(batch: tuple,
                seq_len: int,
@@ -338,7 +350,8 @@ def prep_batch(batch: tuple,
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
     # Convert to JAX.
-    inputs = np.asarray(inputs.numpy())
+    #inputs = np.asarray(inputs.numpy())
+    #print(inputs.shape)
 
     # Grab lengths from aux if it is there.
     lengths = aux_data.get('lengths', None)
@@ -363,7 +376,7 @@ def prep_batch(batch: tuple,
         full_inputs = inputs.astype(float)
 
     # Convert and apply.
-    targets = np.array(targets.numpy())
+    #targets = np.array(targets.numpy())
 
     # If there is an aux channel containing the integration times, then add that.
     if 'timesteps' in aux_data.keys():
@@ -408,9 +421,11 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
+    split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
-        loss, acc, pred = eval_step(inputs, labels, integration_timesteps, state, model, batchnorm)
+        loss, acc, pred = eval_step(
+            inputs, labels, integration_timesteps, state, model, split_indices, batchnorm)
         losses = np.append(losses, loss)
         accuracies = np.append(accuracies, acc)
 
@@ -445,8 +460,20 @@ def train_step(state,
                 mutable=["intermediates"],
             )
 
-        #loss = np.mean(cross_entropy_loss(logits, batch_labels))
-        loss = np.mean(weighted_loss(logits, batch_labels))
+        # average cross-ent loss
+        loss = np.mean(cross_entropy_loss(logits, batch_labels))
+        
+        # not necessary if labels are already one-hot:
+        '''
+        cum_dims = np.cumsum(model.output_dims)
+        loss = np.sum(
+            np.mean(cross_entropy_loss(log, lab))
+            for log, lab in zip(
+                np.split(logits, cum_dims[:-1], axis=1),
+                np.split(batch_labels, cum_dims[:-1], axis=1)
+            )
+        )
+        '''
 
         return loss, (mod_vars, logits)
 
@@ -459,12 +486,13 @@ def train_step(state,
     return state, loss
 
 
-@partial(jax.jit, static_argnums=(4, 5))
+@partial(jax.jit, static_argnums=(4, 5, 6))
 def eval_step(batch_inputs,
               batch_labels,
               batch_integration_timesteps,
               state,
               model,
+              split_indices,
               batchnorm,
               ):
     if batchnorm:
@@ -476,9 +504,20 @@ def eval_step(batch_inputs,
                              batch_inputs, batch_integration_timesteps,
                              )
 
-    #losses = cross_entropy_loss(logits, batch_labels)
-    losses = weighted_loss(logits, batch_labels)
+    losses = cross_entropy_loss(logits, batch_labels) / (len(split_indices) + 1)
+    #losses = weighted_loss(logits, batch_labels)
+    
     #accs = compute_accuracy(logits, batch_labels)
-    accs = weighted_accuracy_and_rmse(logits, batch_labels)
+    #accs = weighted_accuracy_and_rmse(logits, batch_labels)
+
+    # calculate mean accuracy per classification task (e.g. price, order_type etc)
+    accs = np.mean(  # mean over different classification tasks
+            np.array([
+                compute_accuracy(log, lab) for log, lab in zip(
+                    np.split(logits, split_indices, axis=1),
+                    np.split(batch_labels, split_indices, axis=1))
+            ]),
+        axis=0
+    )
 
     return losses, accs, logits

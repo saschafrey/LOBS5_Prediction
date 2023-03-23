@@ -1,6 +1,9 @@
 """ Datasets for core experimental results """
 from functools import partial
 from pathlib import Path
+import numpy as np
+import jax.numpy as jnp
+from jax.experimental import sparse
 import torch
 import torchaudio.functional as TF
 import torchvision
@@ -69,7 +72,10 @@ class DefaultCollateMixin:
 
             return x
         else:
-            return torch.tensor(batch)
+            #return torch.tensor(batch)
+            #return torch.tensor(np.array(batch))
+            #return sparse.BCOO.fromdense(jnp.array(batch))
+            return jnp.array(batch)
 
     @classmethod
     def _collate_fn(cls, batch, *args, **kwargs):

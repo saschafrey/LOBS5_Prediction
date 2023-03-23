@@ -5,8 +5,10 @@ from jax.scipy.linalg import block_diag
 from flax.training import checkpoints
 import orbax.checkpoint
 from lob.lob_seq_model import BatchLobPredModel
+import wandb
 
 from .dataloading import Datasets
+from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
 from s5.ssm import init_S5SSM
@@ -21,12 +23,18 @@ def train(args):
     best_test_loss = 100000000
     best_test_acc = -10000.0
 
+    if args.USE_WANDB:
+        # Make wandb config dictionary
+        wandb.init(project=args.wandb_project, job_type='model_training', config=vars(args), entity=args.wandb_entity)
+    else:
+        wandb.init(mode='offline')
+
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
 
     # determine the size of initial blocks
     block_size = int(ssm_size / args.blocks)
-    #wandb.log({"block_size": block_size})
+    wandb.log({"block_size": block_size})
 
     # Set global learning rate lr (e.g. encoders, etc.) as function of ssm_lr
     lr = args.lr_factor * ssm_lr
@@ -47,8 +55,9 @@ def train(args):
 
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
+    mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
     trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
-      create_dataset_fn(args.dir_name, seed=args.jax_seed, bsz=args.bsz)
+      create_dataset_fn(args.dir_name, seed=args.jax_seed, mask_fn=mask_fn, bsz=args.bsz)
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
 
@@ -91,8 +100,7 @@ def train(args):
     model_cls = partial(
         BatchLobPredModel,
         ssm=ssm_init_fn,
-        output_dims=n_classes,
-        d_output=int(sum(n_classes)),
+        d_output=n_classes,
         d_model=args.d_model,
         n_layers=args.n_layers,
         padded=padded,
@@ -270,43 +278,21 @@ def train(args):
             f" {best_test_acc:.4f} at Epoch {best_epoch + 1}\n"
         )
 
-        '''
         if valloader is not None:
-            if speech:
-                wandb.log(
-                    {
-                        "Training Loss": train_loss,
-                        "Val loss": val_loss,
-                        "Val Accuracy": val_acc,
-                        "Test Loss": test_loss,
-                        "Test Accuracy": test_acc,
-                        "Val2 loss": val2_loss,
-                        "Val2 Accuracy": val2_acc,
-                        "Test2 Loss": test2_loss,
-                        "Test2 Accuracy": test2_acc,
-                        "count": count,
-                        "Learning rate count": lr_count,
-                        "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                        "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
-                    }
-                )
-            else:
-                wandb.log(
-                    {
-                        "Training Loss": train_loss,
-                        "Val loss": val_loss,
-                        "Val Accuracy": val_acc,
-                        "Test Loss": test_loss,
-                        "Test Accuracy": test_acc,
-                        "count": count,
-                        "Learning rate count": lr_count,
-                        "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                        "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
-                    }
-                )
-
+            wandb.log(
+                {
+                    "Training Loss": train_loss,
+                    "Val loss": val_loss,
+                    "Val Accuracy": val_acc,
+                    "Test Loss": test_loss,
+                    "Test Accuracy": test_acc,
+                    "count": count,
+                    "Learning rate count": lr_count,
+                    "Opt acc": opt_acc,
+                    "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
+                    "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                }
+            )
         else:
             wandb.log(
                 {
@@ -325,7 +311,6 @@ def train(args):
         wandb.run.summary["Best Epoch"] = best_epoch
         wandb.run.summary["Best Test Loss"] = best_test_loss
         wandb.run.summary["Best Test Accuracy"] = best_test_acc
-        '''
 
         if count > args.early_stop_patience:
             break
