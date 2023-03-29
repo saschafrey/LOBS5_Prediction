@@ -56,7 +56,6 @@ def make_data_loader(dset,
 		shuffle = False
 		drop_last = False
 
-
 	# Generate the dataloaders.
 	return torch.utils.data.DataLoader(
 		dataset=dset, collate_fn=collate_fn, batch_size=batch_size, shuffle=shuffle,

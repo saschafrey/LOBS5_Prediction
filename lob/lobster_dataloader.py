@@ -137,6 +137,9 @@ class LOBSTER_Dataset(Dataset):
         return self._len
 
     def __getitem__(self, idx):
+        if hasattr(idx, '__len__'):
+            return list(zip(*[self[i] for i in idx]))
+
         file_idx, seq_idx = self._get_seq_location(idx)
         
         # load sequence from file directly without cache
@@ -154,7 +157,7 @@ class LOBSTER_Dataset(Dataset):
         #print(f'slice ({seq_start}, {seq_end})')
         X = X[seq_start: seq_end]
         # apply mask and extract prediction target token
-        X, y = self.mask_fn(X, self.rng)
+        X, y = self.mask_fn(X.copy(), self.rng)
         X, y = X.reshape(-1), y.reshape(-1)
         # TODO: look into aux_data (could we still use time when available?)
         return X, y#, None
@@ -244,14 +247,16 @@ class LOBSTER_Dataset(Dataset):
 class LOBSTER_Sampler(Sampler):
     def __init__(self, dset, n_files_shuffle, batch_size=1, seed=None):
         self.dset = dset
+        assert n_files_shuffle > 0
         self.n_files_shuffle = n_files_shuffle
         self.batch_size = batch_size
 
         self.rng = random.Random(seed)
 
+    def reset(self):
         # LOBSTER_Dataset
         if hasattr(self.dset, "num_days"):
-            days = range(dset.num_days)
+            days = range(self.dset.num_days)
         # LOBSTER_Subset
         elif hasattr(self.dset, "indices_on_day"):
             days = list(self.dset.indices_on_day.keys())
@@ -265,6 +270,9 @@ class LOBSTER_Sampler(Sampler):
         self.active_indices = []
 
     def __iter__(self):
+        # reset days and active indices whenever new iterator is created (e.g. new epoch)
+        self.reset()
+
         while len(self.days_unused) > 0 or len(self.active_indices) >= self.batch_size:
             batch = []
             # not enough indices available for full batch
@@ -320,19 +328,24 @@ class LOBSTER_Subset(Subset):
         self.indices_on_day = self.get_indices_by_day(
             self.indices)
 
+    def __getitem__(self, idx):
+        if isinstance(idx, list):
+            return self.dataset[[self.indices[i] for i in idx]]
+        return self.dataset[self.indices[idx]]
+
     def get_indices_by_day(self, indices):
         indices_on_day = {}
         day = 0
         i_end = self.dataset._seqs_cumsum[day + 1]
 
-        for idx in indices:
+        for i, idx in enumerate(indices):
             while idx >= i_end:
                 day += 1
                 i_end = self.dataset._seqs_cumsum[day + 1]
             
             if day not in indices_on_day.keys():
                 indices_on_day[day] = []
-            indices_on_day[day].append(idx)
+            indices_on_day[day].append(i)
         return indices_on_day
 
 
@@ -393,16 +406,16 @@ class LOBSTER(SequenceDataset):
         self.rng = random.Random(self.seed)
 
         # split into train/val in split_train_val()
-        # TODO: parametrise task as either random tokenization vs causal?
         self.dataset_train = LOBSTER_Dataset(
             train_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=5,
+            n_buffer_files=50,
             randomize_offset=True,
         )
-        self.d_input = self.dataset_train.shape[-1]
+        #self.d_input = self.dataset_train.shape[-1]
+        self.d_input = len(self.dataset_train.vocab)
         self.d_output = self.d_input
         # sequence length
         self.L = self.n_messages * Message_Tokenizer.MSG_LEN
@@ -414,13 +427,13 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=2,
+            n_buffer_files=50,
             randomize_offset=False,
         )
 
         # TODO: remove
         # decrease test size for now to run faster:
-        self.dataset_test = LOBSTER_Subset(self.dataset_test, range(int(0.1 * len(self.dataset_test))))
+        #self.dataset_test = LOBSTER_Subset(self.dataset_test, range(int(0.1 * len(self.dataset_test))))
 
     def split_train_val(self, val_split):
         """ takes a random subset of training data as validation data

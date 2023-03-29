@@ -12,6 +12,7 @@ class Vocab:
         self.counter = 3  # 0: MSK, 1: HID, 2: NAN
         self.ENCODING = {}
         self.DECODING = {}
+        self.DECODING_GLOBAL = {}
         self.TOKEN_DELIM_IDX = {}
 
         self._add_field('time', [str(i).zfill(3) for i in range(1000)], [3,6,9,12])
@@ -31,14 +32,27 @@ class Vocab:
         dec = {tok: val for val, tok in enc.items()}
         self.ENCODING[name] = enc
         self.DECODING[name] = dec
+        self.DECODING_GLOBAL.update({tok: (name, val) for val, tok in enc.items()})
         self.counter += len(enc)
         self.TOKEN_DELIM_IDX[name] = delim_i
 
     def _add_special_tokens(self):
         for field, enc in self.ENCODING.items():
+            self.ENCODING[field][Vocab.MASK_TOK] = 'MSK'
+            self.ENCODING[field][Vocab.HIDDEN_TOK] = 'HID'
+            self.ENCODING[field][Vocab.NA_TOK] = 'NAN'
+
             self.DECODING[field][Vocab.MASK_TOK] = 'MSK'
             self.DECODING[field][Vocab.HIDDEN_TOK] = 'HID'
             self.DECODING[field][Vocab.NA_TOK] = 'NAN'
+        self.ENCODING['generic'] = {
+            'MSK': Vocab.MASK_TOK,
+            'HID': Vocab.HIDDEN_TOK,
+            'NAN': Vocab.NA_TOK,
+        }
+        self.DECODING_GLOBAL[Vocab.MASK_TOK] = ('generic', 'MSK')
+        self.DECODING_GLOBAL[Vocab.HIDDEN_TOK] = ('generic', 'HID')
+        self.DECODING_GLOBAL[Vocab.NA_TOK] = ('generic', 'NAN')
 
 class Message_Tokenizer:
 
@@ -128,7 +142,7 @@ class Message_Tokenizer:
         return col.apply(_encode_field)
 
     def decode(self, toks, vocab):
-        str_arr = self._decode_to_str(toks, vocab)
+        str_arr = self.decode_to_str(toks, vocab)
         cols_str = np.split(str_arr, Message_Tokenizer.TOK_DELIM, axis=1)
         out_numeric = np.empty((toks.shape[0], len(cols_str)), dtype=float)
         # decode each column to float
@@ -136,32 +150,35 @@ class Message_Tokenizer:
             out_numeric[:, i] = self._parse_col(inp)
 
         return out_numeric
-
-    def _decode_to_str(self, toks, vocab):
+    
+    def decode_to_str(self, toks, vocab, error_on_invalid=False):
+        if toks.ndim == 1:
+            toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
+        elif toks.ndim >= 2:
+            toks = np.array(toks).reshape(toks.shape[0], -1, Message_Tokenizer.MSG_LEN)
         out = np.empty_like(toks, dtype='<U3')
         for dec_type, dec in vocab.DECODING.items():
-            # all token cols using current encoder type
-            tok_sel = toks[:, self.col_idx_by_encoder[dec_type]]
-            tok_out = np.empty_like(tok_sel, dtype='<U3')
-            # loop through substitutions
+            col_msk = np.zeros_like(toks, dtype=bool)
+            col_msk[..., self.col_idx_by_encoder[dec_type]] = True
             for t, repl in dec.items():
-                tok_out[tok_sel==t] = repl
-            
-            out[:, self.col_idx_by_encoder[dec_type]] = tok_out
-        
-        # left over empty strings imply invalid tokens
-        err_i = np.argwhere(out == '')
-        if len(err_i) > 0:
-            err_toks = toks[tuple(err_i.T)]
-            #err_toks = toks[out == '']
-            err_fields = []
-            for err_sample, err_col in err_i:
-                err_fields.append(np.searchsorted(Message_Tokenizer.TOK_DELIM, err_col, side='right'))
-            e = ValueError(
-                f"Invalid tokens {err_toks} at indices {err_i} "
-                + f"for fields {[Message_Tokenizer.FIELDS[f] for f in err_fields]})")
-            e.err_i = err_i
-            raise e
+                #print(((toks == t) * col_msk).shape)
+                out[(toks == t) * col_msk] = repl
+
+        if error_on_invalid:
+            # left over empty strings imply invalid tokens
+            err_i = np.argwhere(out == '')
+            if len(err_i) > 0:
+                err_toks = toks[tuple(err_i.T)]
+                #err_toks = toks[out == '']
+                err_fields = []
+                for err_sample, err_col in err_i:
+                    err_fields.append(np.searchsorted(Message_Tokenizer.TOK_DELIM, err_col, side='right'))
+                e = ValueError(
+                    f"Invalid tokens {err_toks} at indices {err_i} "
+                    + f"for fields {[Message_Tokenizer.FIELDS[f] for f in err_fields]})")
+                e.err_i = err_i
+                raise e
+
         return out
 
     def _parse_col(self, inp):
@@ -185,7 +202,7 @@ class Message_Tokenizer:
 
     def _validate_syntax(self, toks, vocab):
         try:
-            decoded = self._decode_to_str(toks, vocab)
+            decoded = self.decode_to_str(toks, vocab, error_on_invalid=True)
             return True, decoded
         except ValueError as e:
             return False, e.err_i
@@ -195,6 +212,12 @@ class Message_Tokenizer:
             return tuple of (is_valid, error in field, error message)
         '''
         pass
+
+    def invalid_toks_per_msg(self, toks, vocab):
+        return (self.decode_to_str(toks, vocab) == '').sum(axis=-1)
+    
+    def invalid_toks_per_seq(self, toks, vocab):
+        return self.invalid_toks_per_msg(toks, vocab).sum(axis=-1)
 
     def preproc(self, m, b, allowed_event_types=[1,2,3,4]):
         # TYPE

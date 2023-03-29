@@ -2,20 +2,24 @@ import argparse
 from s5.utils.util import str2bool
 from lob.train import train
 from lob.dataloading import Datasets
-import tensorflow as tf
+#import tensorflow as tf
 import os
+import torch
 
-#physical_devices = tf.config.list_physical_devices('GPU')
-#tf.config.experimental.set_memory_growth(physical_devices[0], True)
-tf.config.experimental.set_visible_devices([], "GPU")
-
-# no GPU use at all
-#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
 
 if __name__ == "__main__":
+
+	#physical_devices = tf.config.list_physical_devices('GPU')
+	#tf.config.experimental.set_memory_growth(physical_devices[0], True)
+	#tf.config.experimental.set_visible_devices([], "GPU")
+
+	# no GPU use at all
+	#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+	#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
+
+	torch.multiprocessing.set_start_method('spawn')
 
 	parser = argparse.ArgumentParser()
 
@@ -35,14 +39,14 @@ if __name__ == "__main__":
 						help="causal or random masking of sequences")
 
 	# Model Parameters
-	parser.add_argument("--n_layers", type=int, default=2,  #6
+	parser.add_argument("--n_layers", type=int, default=6,  #6
 						help="Number of layers in the network")
-	parser.add_argument("--d_model", type=int, default=32,  #128
+	parser.add_argument("--d_model", type=int, default=32,  #128, 32, 16
 						help="Number of features, i.e. H, "
 							 "dimension of layer inputs/outputs")
-	parser.add_argument("--ssm_size_base", type=int, default=64,  # 256
+	parser.add_argument("--ssm_size_base", type=int, default=32,  # 256
 						help="SSM Latent size, i.e. P")
-	parser.add_argument("--blocks", type=int, default=8,
+	parser.add_argument("--blocks", type=int, default=8,  # 8, 4
 						help="How many blocks, J, to initialize with")
 	parser.add_argument("--C_init", type=str, default="trunc_standard_normal",
 						choices=["trunc_standard_normal", "lecun_normal", "complex_normal"],
@@ -77,7 +81,7 @@ if __name__ == "__main__":
 						help="batchnorm momentum")
 	parser.add_argument("--bsz", type=int, default=16, #64, (max 16 with full size)
 						help="batch size")
-	parser.add_argument("--epochs", type=int, default=20,  #100
+	parser.add_argument("--epochs", type=int, default=100,  #100, 20
 						help="max number of epochs")
 	parser.add_argument("--early_stop_patience", type=int, default=1000,
 						help="number of epochs to continue training when val loss plateaus")

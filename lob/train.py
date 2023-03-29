@@ -59,6 +59,11 @@ def train(args):
     trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
       create_dataset_fn(args.dir_name, seed=args.jax_seed, mask_fn=mask_fn, bsz=args.bsz)
 
+    #print("in_dim", in_dim)  # 20
+    #print("n_classes", n_classes)  # 20
+    #import sys
+    #sys.exit()
+
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
 
     # Initialize state matrix A using approximation to HiPPO-LegS matrix
@@ -219,11 +224,12 @@ def train(args):
         }
         orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         checkpoints.save_checkpoint(
-            ckpt_dir='../checkpoints',
+            ckpt_dir='checkpoints',
             target=ckpt,
             step=epoch,
             overwrite=True,
             keep=2,
+            keep_every_n_steps=10,
             orbax_checkpointer=orbax_checkpointer
         )
 

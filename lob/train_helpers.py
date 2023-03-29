@@ -278,7 +278,7 @@ def get_slices(dims):
 #@jax.jit
 @partial(np.vectorize, signature="(c),()->()")
 def cross_entropy_loss(logits, label):
-    one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[0])
+    one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[-1])
     return -np.sum(one_hot_label * logits)
     #return -np.sum(label * logits)
 
@@ -308,14 +308,14 @@ def weighted_loss(
         [w * loss_fn(outputs[s], targets[s]) for w, loss_fn, s in zip(weights, loss_fns, slices)])
 '''
 
-#@partial(np.vectorize, signature="(c),()->()")
-#def compute_accuracy(logits, label):
-#    return np.argmax(logits) == label
+@partial(np.vectorize, signature="(c),()->()")
+def compute_accuracy(logits, label):
+    return np.argmax(logits) == label
 
-@jax.jit
-def compute_accuracy(logits, dummy_labels):
-    bool_idx = np.arange(logits.shape[0]), np.argmax(logits, axis=1)
-    return dummy_labels[bool_idx] == 1
+#@jax.jit
+#def compute_accuracy(logits, dummy_labels):
+#    bool_idx = np.arange(logits.shape[0]), np.argmax(logits, axis=1)
+#    return dummy_labels[bool_idx] == 1
 
 '''
 def weighted_accuracy_and_rmse(
@@ -333,7 +333,7 @@ def weighted_accuracy_and_rmse(
 
 def prep_batch(batch: tuple,
                seq_len: int,
-               in_dim: int) -> Tuple[np.ndarray, np.ndarray, np.array]:
+               in_dim: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Take a batch and convert it to a standard x/y format.
     :param batch:       (x, y, aux_data) as returned from dataloader.
@@ -356,11 +356,12 @@ def prep_batch(batch: tuple,
     # Grab lengths from aux if it is there.
     lengths = aux_data.get('lengths', None)
 
+    assert inputs.shape[1] == seq_len
     # Make all batches have same sequence length
-    num_pad = seq_len - inputs.shape[1]
-    if num_pad > 0:
+    #num_pad = seq_len - inputs.shape[1]
+    #if num_pad > 0:
         # Assuming vocab padding value is zero
-        inputs = np.pad(inputs, ((0, 0), (0, num_pad)), 'constant', constant_values=(0,))
+    #    inputs = np.pad(inputs, ((0, 0), (0, num_pad)), 'constant', constant_values=(0,))
 
     # Inputs is either [n_batch, seq_len] or [n_batch, seq_len, in_dim].
     # If there are not three dimensions and trailing dimension is not equal to in_dim then
@@ -377,6 +378,7 @@ def prep_batch(batch: tuple,
 
     # Convert and apply.
     #targets = np.array(targets.numpy())
+    targets = np.squeeze(targets)
 
     # If there is an aux channel containing the integration times, then add that.
     if 'timesteps' in aux_data.keys():
@@ -399,6 +401,12 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
 
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim)
+        #print(inputs.shape)
+        #print(labels.shape)
+        #print(integration_times.shape)
+        #import sys
+        #sys.exit()
+
         rng, drop_rng = jax.random.split(rng)
         state, loss = train_step(
             state,
@@ -421,11 +429,12 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
-    split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
+    #split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
         loss, acc, pred = eval_step(
-            inputs, labels, integration_timesteps, state, model, split_indices, batchnorm)
+            #inputs, labels, integration_timesteps, state, model, split_indices, batchnorm)
+            inputs, labels, integration_timesteps, state, model, batchnorm)
         losses = np.append(losses, loss)
         accuracies = np.append(accuracies, acc)
 
@@ -486,13 +495,13 @@ def train_step(state,
     return state, loss
 
 
-@partial(jax.jit, static_argnums=(4, 5, 6))
+@partial(jax.jit, static_argnums=(4, 5))
 def eval_step(batch_inputs,
               batch_labels,
               batch_integration_timesteps,
               state,
               model,
-              split_indices,
+              #split_indices,
               batchnorm,
               ):
     if batchnorm:
@@ -504,20 +513,21 @@ def eval_step(batch_inputs,
                              batch_inputs, batch_integration_timesteps,
                              )
 
-    losses = cross_entropy_loss(logits, batch_labels) / (len(split_indices) + 1)
+    #losses = cross_entropy_loss(logits, batch_labels) / (len(split_indices) + 1)
     #losses = weighted_loss(logits, batch_labels)
+    losses = cross_entropy_loss(logits, batch_labels)
     
-    #accs = compute_accuracy(logits, batch_labels)
+    accs = compute_accuracy(logits, batch_labels)
     #accs = weighted_accuracy_and_rmse(logits, batch_labels)
 
     # calculate mean accuracy per classification task (e.g. price, order_type etc)
-    accs = np.mean(  # mean over different classification tasks
-            np.array([
-                compute_accuracy(log, lab) for log, lab in zip(
-                    np.split(logits, split_indices, axis=1),
-                    np.split(batch_labels, split_indices, axis=1))
-            ]),
-        axis=0
-    )
+    #accs = np.mean(  # mean over different classification tasks
+    #        np.array([
+    #            compute_accuracy(log, lab) for log, lab in zip(
+    #                np.split(logits, split_indices, axis=1),
+    #                np.split(batch_labels, split_indices, axis=1))
+    #        ]),
+    #    axis=0
+    #)
 
     return losses, accs, logits
