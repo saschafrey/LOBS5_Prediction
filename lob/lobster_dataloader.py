@@ -31,12 +31,49 @@ class LOBSTER_Dataset(Dataset):
     #ORDER_SIZES = 64
     #PRICES = 23
 
+    @staticmethod
+    def get_masking_fn(*, random_msg_idxs=None, random_fields=None, randomize_message=True):
+        """ Get masking function for given fields
+            random_msg_idxs: list of message indices to mask
+            random_fields: list of fields to mask.
+                           NOTE: either this or random_msg_idxs must be given
+            randomize_message: if True, select random message to mask, otherwise
+                               mask most recent message
+        """
+        assert (random_msg_idxs is None) != (random_fields is None)
+        if random_fields is not None:
+            # get corresponding field indices
+            random_fields = np.array(random_fields)
+            ref = np.array(Message_Tokenizer.FIELDS)
+            field_idxs = np.array([np.argwhere(f==ref) for f in random_fields]).flatten()
+            random_msg_idxs = [
+                idx 
+                for f in field_idxs
+                for idx in range(*LOBSTER_Dataset._get_tok_slice_i(f))]
+        
+        def masking_fn(seq, rng):
+            seq = seq.copy()
+            if randomize_message:
+                m_i = rng.integers(0, seq.shape[0])
+            else:
+                m_i = seq.shape[0] - 1
+            if len(random_msg_idxs) == 1:
+                tok_i = random_msg_idxs[0]
+            else:
+                tok_i = rng.choice(random_msg_idxs)
+            y = seq[m_i, tok_i]
+            seq[m_i, tok_i] = Vocab.MASK_TOK
+            return seq, y
+            
+        return masking_fn
+
     # TODO: random seed for mask positioning?
     @staticmethod
     def random_mask(seq, rng):
         """ Select random token in given seq and set to MSK token
             as prediction target
         """
+        seq = seq.copy()
         i = rng.integers(0, len(seq.flat) - 1)
         y = seq.flat[i]
         seq.flat[i] = Vocab.MASK_TOK
@@ -51,7 +88,7 @@ class LOBSTER_Dataset(Dataset):
             This simulates the causal prediction task, where fields
             can be predicted in arbitrary order.
         """
-
+        seq = seq.copy()
         hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
         i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
         msk_i = rng.integers(i_start, i_end)
@@ -68,11 +105,17 @@ class LOBSTER_Dataset(Dataset):
 
     @staticmethod
     def _select_random_causal_mask(rng):
+        """ Select random subset of fields and one field to mask
+        """
         n_fields = len(Message_Tokenizer.TOK_LENS)
-        sel_fields = sorted(rng.choice(
-            list(range(n_fields)),
-            rng.integers(1, n_fields + 1), replace=False
-        ))
+        # TODO: revert! for now, mask all fields except current one
+        # sel_fields = sorted(rng.choice(
+        #     list(range(n_fields)),
+        #     rng.integers(1, n_fields + 1),
+        #     replace=False
+        # ))
+        sel_fields = list(range(n_fields))
+
         msk_field = rng.choice(sel_fields)
         sel_fields = list(set(sel_fields) - {msk_field})
         return sel_fields, msk_field
@@ -157,7 +200,7 @@ class LOBSTER_Dataset(Dataset):
         #print(f'slice ({seq_start}, {seq_end})')
         X = X[seq_start: seq_end]
         # apply mask and extract prediction target token
-        X, y = self.mask_fn(X.copy(), self.rng)
+        X, y = self.mask_fn(X, self.rng)
         X, y = X.reshape(-1), y.reshape(-1)
         # TODO: look into aux_data (could we still use time when available?)
         return X, y#, None

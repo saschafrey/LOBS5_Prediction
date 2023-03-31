@@ -1,10 +1,22 @@
+from typing import Tuple
 from lob.encoding import Message_Tokenizer, Vocab
 import jax
 from jax import nn
 import jax.numpy as np
 from functools import partial
 
+from lob.lobster_dataloader import LOBSTER_Dataset
+
 v = Vocab()
+
+
+def is_tok_valid(tok, field, vocab):
+    tok = tok.tolist()
+    if isinstance(field, str):
+        return tok in vocab.DECODING[Message_Tokenizer.FIELD_ENC_TYPES[field]]
+    else:
+        return [t in vocab.DECODING[Message_Tokenizer.FIELD_ENC_TYPES[f]] 
+                for t, f in zip(tok, field)]
 
 def get_masked_idx(seq):
     """ Get the indices of the masked tokens in a given input (batched or not)
@@ -18,10 +30,7 @@ def get_masked_idx(seq):
 def get_field_from_idx(idx):
     """ Get the field of a given index (or indices) in a message
     """
-    if np.any(idx > Message_Tokenizer.MSG_LEN - 1):
-        raise ValueError("Index ({}) must be less than {}".format(idx, Message_Tokenizer.MSG_LEN))
-    field_i = np.searchsorted(Message_Tokenizer.TOK_DELIM, idx, side='right')
-    return [Message_Tokenizer.FIELDS[i] for i in field_i]
+    return Message_Tokenizer.get_field_from_idx(idx)
 
 def get_masked_fields(inp_maybe_batched):
     """ Get the fields of the masked tokens in a given input (batched or not)
@@ -83,7 +92,9 @@ def pred_rank(pred, labels):
     """
     correct_mask = nn.one_hot(labels.astype(int), pred.shape[-1]).astype(bool)
     # ::-1 sorts in descending order (0 is highest rank)
-    return pred[..., ::-1].argsort(axis=-1)[correct_mask]
+    a = pred.argsort(axis=-1)
+    ranks = a[..., ::-1].argsort(axis=-1)
+    return ranks[correct_mask]
 
 def fill_predicted_toks(seq, pred, top_n=1, rng=None):
     """ Set the predicted token in the given sequence
@@ -106,11 +117,94 @@ def sample_pred(pred, top_n, rng):
     idx = np.arange(pred.shape[0]).reshape(pred.shape)
     p = pred * mask_top_n
     p = p / p.sum(axis=-1, keepdims=True)
-    #print(p.shape)
-    #print(idx.shape)
     return jax.random.choice(rng, idx, p=p)
 
-#@partial(np.vectorize, signature="(n)->()")
-#def test(a):
-#    return np.argmax(a)
+def append_hid_msg(seq):
+    """ Append a new empty (HID token) message to a sequence
+        removing first message to keep seq_len constant
+    """
+    l = Message_Tokenizer.MSG_LEN
+    return np.concatenate([seq[l:], np.full((Message_Tokenizer.MSG_LEN,), Vocab.HIDDEN_TOK)])
 
+def mask_last_msg_in_seq(
+        seq: np.ndarray,
+        i: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+    
+    l = Message_Tokenizer.MSG_LEN
+    assert (i >= -l) and (i < l), "i must be in [-MSG_LEN, MSG_LEN)"
+    if i >= 0:
+        i += len(seq) - l
+    y = seq[i]
+    return seq.at[i].set(v.MASK_TOK), y
+
+@partial(jax.jit, static_argnums=(3, 4))
+def predict(
+        batch_inputs,
+        batch_integration_timesteps,
+        state,
+        model,
+        batchnorm,
+    ):
+    if batchnorm:
+        logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
+                             batch_inputs, batch_integration_timesteps,
+                             )
+    else:
+        logits = model.apply({"params": state.params},
+                             batch_inputs, batch_integration_timesteps,
+                             )
+
+    return logits
+
+def pred_next_tok(
+        seq,
+        state,
+        model,
+        batchnorm,
+        sample_top_n,
+        mask_i,
+        rng,
+        vocab_len,
+        new_msg=False,
+    ):
+    """ Predict the next token with index i of the last message in the sequence
+        if new_msg=True, a new empty message is appended to the sequence
+        Returns the updated sequence
+        TODO: add flag to only sample from syntactically valid tokens
+    """
+
+    # create masked message for prediction
+    if new_msg:
+        seq = append_hid_msg(seq)
+    seq, _ = mask_last_msg_in_seq(seq, mask_i)
+    # inference
+    integration_timesteps = np.ones((1, len(seq)))
+    seq_onehot = nn.one_hot(
+        np.expand_dims(seq, axis=0), vocab_len).astype(float)
+    logits = predict(
+        seq_onehot,
+        integration_timesteps, state, model, batchnorm)
+    # update sequence
+    # note: rng arg expects one element per batch element
+    seq = fill_predicted_toks(seq, logits, sample_top_n, np.array([rng]))
+    return seq
+
+def pred_msg(seq, n_messages, state, model, batchnorm, rng):
+    l = Message_Tokenizer.MSG_LEN
+    for m_i in range(n_messages):
+        new_msg = True
+        for i in range(l):
+            seq = pred_next_tok(
+                seq,
+                state,
+                model,
+                batchnorm,
+                sample_top_n=5,
+                mask_i=i,
+                new_msg=new_msg,
+                vocab_len=len(v),
+                rng=rng,
+            )
+            new_msg = False
+    return seq

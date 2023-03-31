@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import jax.numpy as jnp
 
 
 class Vocab:
@@ -86,26 +87,76 @@ class Message_Tokenizer:
         'direction_new': 'direction',
     }
 
-    def __init__(self) -> None:
-        self._generate_col_idx_by_encoder()
+    @staticmethod
+    def get_field_from_idx(idx):
+        """ Get the field of a given index (or indices) in a message
+        """
+        if isinstance(idx, int):
+            idx = np.array([idx])
+        if np.any(idx > Message_Tokenizer.MSG_LEN - 1):
+            raise ValueError("Index ({}) must be less than {}".format(idx, Message_Tokenizer.MSG_LEN))
+        field_i = np.searchsorted(Message_Tokenizer.TOK_DELIM, idx, side='right')
+        return [Message_Tokenizer.FIELDS[i] for i in field_i]
 
-    def _generate_col_idx_by_encoder(self):
+    @staticmethod
+    def syntax_validation_matrix():
+        """ Create a matrix of shape (MSG_LEN, VOCAB_SIZE) where a
+            True value indicates that the token is valid for the location
+            in the message.
+        """
+        v = Vocab()
+
+        idx = []
+        for i in range(Message_Tokenizer.MSG_LEN):
+            field = Message_Tokenizer.get_field_from_idx(i)
+            decoder_key = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
+            for tok, val in v.DECODING[decoder_key].items():
+                idx.append([i, tok])
+        idx = tuple(jnp.array(idx).T)
+        mask = jnp.zeros((Message_Tokenizer.MSG_LEN, len(v)), dtype=bool)
+        mask = mask.at[idx].set(True)
+
+        # adjustments for special tokens (no MSK, NAN, HID) allowed
+        mask = mask.at[:, v.MASK_TOK].set(False)
+        mask = mask.at[:, v.NA_TOK].set(False)
+        mask = mask.at[:, v.HIDDEN_TOK].set(False)
+
+        # adjustment for positions only allowing subset of field
+        # e.g. +/- at start of price
+        enc_type = 'price'
+        allowed_toks = jnp.array([v.ENCODING[enc_type]['+'], v.ENCODING[enc_type]['-']])
+        adj_col = jnp.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
+        # TODO: remove hardcoding and make this more general
+        mask = mask.at[(7, 17), :].set(adj_col)
+        return mask
+    
+    #VALID_MATRIX = syntax_validation_matrix.__func__()
+    
+    @staticmethod
+    def _generate_col_idx_by_encoder():
         """ Generates attribute dictionary col_idx_by_encoder
             with encoder type as key and a list of column (field)
             indices as value. This is used to efficiently decode tokenized
             data. 
         """
-        self.col_idx_by_encoder = {}
+        col_idx_by_encoder = {}
         counter = 0
         for n_toks, (col, enc_type) in zip(
             Message_Tokenizer.TOK_LENS,
             Message_Tokenizer.FIELD_ENC_TYPES.items()):
             add_vals = list(range(counter, counter + n_toks))
             try:
-                self.col_idx_by_encoder[enc_type].extend(add_vals)
+                col_idx_by_encoder[enc_type].extend(add_vals)
             except KeyError:
-                self.col_idx_by_encoder[enc_type] = add_vals
+                col_idx_by_encoder[enc_type] = add_vals
             counter += n_toks
+        return col_idx_by_encoder
+
+    #col_idx_by_encoder = _generate_col_idx_by_encoder.__func__()()
+
+    def __init__(self) -> None:
+        #self._generate_col_idx_by_encoder()
+        pass
 
     def encode(self, m, vocab):
         enc = vocab.ENCODING

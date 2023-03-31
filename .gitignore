@@ -167,3 +167,5 @@ raw_datasets/
 
 # data
 data/
+
+checkpoints*/

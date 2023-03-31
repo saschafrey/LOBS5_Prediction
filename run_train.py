@@ -35,7 +35,7 @@ if __name__ == "__main__":
 						default='lobster-prediction',
 						help="dataset name")
 	parser.add_argument("--masking", type=str, choices={'causal', 'random'},
-						default='random',
+						default='causal',  # random
 						help="causal or random masking of sequences")
 
 	# Model Parameters
