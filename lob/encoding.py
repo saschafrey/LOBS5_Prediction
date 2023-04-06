@@ -91,46 +91,12 @@ class Message_Tokenizer:
     def get_field_from_idx(idx):
         """ Get the field of a given index (or indices) in a message
         """
-        if isinstance(idx, int):
+        if isinstance(idx, int) or idx.ndim == 0:
             idx = np.array([idx])
         if np.any(idx > Message_Tokenizer.MSG_LEN - 1):
             raise ValueError("Index ({}) must be less than {}".format(idx, Message_Tokenizer.MSG_LEN))
         field_i = np.searchsorted(Message_Tokenizer.TOK_DELIM, idx, side='right')
         return [Message_Tokenizer.FIELDS[i] for i in field_i]
-
-    @staticmethod
-    def syntax_validation_matrix():
-        """ Create a matrix of shape (MSG_LEN, VOCAB_SIZE) where a
-            True value indicates that the token is valid for the location
-            in the message.
-        """
-        v = Vocab()
-
-        idx = []
-        for i in range(Message_Tokenizer.MSG_LEN):
-            field = Message_Tokenizer.get_field_from_idx(i)
-            decoder_key = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
-            for tok, val in v.DECODING[decoder_key].items():
-                idx.append([i, tok])
-        idx = tuple(jnp.array(idx).T)
-        mask = jnp.zeros((Message_Tokenizer.MSG_LEN, len(v)), dtype=bool)
-        mask = mask.at[idx].set(True)
-
-        # adjustments for special tokens (no MSK, NAN, HID) allowed
-        mask = mask.at[:, v.MASK_TOK].set(False)
-        mask = mask.at[:, v.NA_TOK].set(False)
-        mask = mask.at[:, v.HIDDEN_TOK].set(False)
-
-        # adjustment for positions only allowing subset of field
-        # e.g. +/- at start of price
-        enc_type = 'price'
-        allowed_toks = jnp.array([v.ENCODING[enc_type]['+'], v.ENCODING[enc_type]['-']])
-        adj_col = jnp.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
-        # TODO: remove hardcoding and make this more general
-        mask = mask.at[(7, 17), :].set(adj_col)
-        return mask
-    
-    #VALID_MATRIX = syntax_validation_matrix.__func__()
     
     @staticmethod
     def _generate_col_idx_by_encoder():
@@ -155,7 +121,7 @@ class Message_Tokenizer:
     #col_idx_by_encoder = _generate_col_idx_by_encoder.__func__()()
 
     def __init__(self) -> None:
-        #self._generate_col_idx_by_encoder()
+        self.col_idx_by_encoder = self._generate_col_idx_by_encoder()
         pass
 
     def encode(self, m, vocab):
@@ -193,8 +159,9 @@ class Message_Tokenizer:
         return col.apply(_encode_field)
 
     def decode(self, toks, vocab):
+        toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
         str_arr = self.decode_to_str(toks, vocab)
-        cols_str = np.split(str_arr, Message_Tokenizer.TOK_DELIM, axis=1)
+        cols_str = np.split(str_arr, Message_Tokenizer.TOK_DELIM, axis=-1)
         out_numeric = np.empty((toks.shape[0], len(cols_str)), dtype=float)
         # decode each column to float
         for i, inp in enumerate(cols_str):
@@ -203,10 +170,11 @@ class Message_Tokenizer:
         return out_numeric
     
     def decode_to_str(self, toks, vocab, error_on_invalid=False):
-        if toks.ndim == 1:
-            toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
-        elif toks.ndim >= 2:
-            toks = np.array(toks).reshape(toks.shape[0], -1, Message_Tokenizer.MSG_LEN)
+        # if toks.ndim == 1:
+        #     toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
+        # elif toks.ndim >= 2:
+        #     toks = np.array(toks).reshape(toks.shape[0], -1, Message_Tokenizer.MSG_LEN)
+        toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
         out = np.empty_like(toks, dtype='<U3')
         for dec_type, dec in vocab.DECODING.items():
             col_msk = np.zeros_like(toks, dtype=bool)

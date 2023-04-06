@@ -1,14 +1,81 @@
-from typing import Tuple
+from typing import Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer, Vocab
 import jax
 from jax import nn
+from jax.random import PRNGKeyArray
+import flax
+from flax.training.train_state import TrainState
 import jax.numpy as np
 from functools import partial
+import numpy as onp
 
 from lob.lobster_dataloader import LOBSTER_Dataset
 
 v = Vocab()
 
+
+def syntax_validation_matrix():
+    """ Create a matrix of shape (MSG_LEN, VOCAB_SIZE) where a
+        True value indicates that the token is valid for the location
+        in the message.
+    """
+    v = Vocab()
+
+    idx = []
+    for i in range(Message_Tokenizer.MSG_LEN):
+        field = Message_Tokenizer.get_field_from_idx(i)
+        decoder_key = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
+        for tok, val in v.DECODING[decoder_key].items():
+            idx.append([i, tok])
+    idx = tuple(np.array(idx).T)
+    mask = np.zeros((Message_Tokenizer.MSG_LEN, len(v)), dtype=bool)
+    mask = mask.at[idx].set(True)
+
+    """
+    # adjustment for positions only allowing subset of field
+    # e.g. +/- at start of price
+    enc_type = 'price'
+    allowed_toks = np.array([v.ENCODING[enc_type]['+'], v.ENCODING[enc_type]['-']])
+    adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
+    i_slice = get_idx_from_field(enc_type)
+    mask = mask.at[slice(i_slice), :].set(adj_col)
+
+    enc_type = 'event_type'
+    # in original event type, only new messages and executions allowed (no cancels or deletions)
+    allowed_toks = np.array([v.ENCODING[enc_type]['1'], v.ENCODING[enc_type]['4']])
+    adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
+    i_slice = get_idx_from_field(enc_type)
+    mask = mask.at[slice(i_slice), :].set(adj_col)
+    """
+
+    # adjustment for positions only allowing subset of field
+    # e.g. +/- at start of price
+    i, _ = get_idx_from_field("price")
+    mask = update_allowed_tok_slice(mask, i, ['+', '-'])
+    i, _ = get_idx_from_field("price_new")
+    mask = update_allowed_tok_slice(mask, i, ['+', '-'])
+    # only new messages and executions allowed in original message
+    # and only cancels or deletions in modified message
+    i, _ = get_idx_from_field("event_type")
+    mask = update_allowed_tok_slice(mask, i, ['1', '4'])
+    i, _ = get_idx_from_field("event_type_new")
+    mask = update_allowed_tok_slice(mask, i, ['2', '3'])
+
+    # adjustments for special tokens (no MSK or HID) allowed
+    # NA always allowed
+    mask = mask.at[:, v.MASK_TOK].set(False)
+    mask = mask.at[:, v.HIDDEN_TOK].set(False)
+    mask = mask.at[:, v.NA_TOK].set(True)
+
+    return mask
+
+def update_allowed_tok_slice(mask, i, allowed_toks):
+    field = get_field_from_idx(i)
+    enc_type = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
+    allowed_toks = np.array([v.ENCODING[enc_type][t] for t in allowed_toks])
+    adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
+    mask = mask.at[i, :].set(adj_col)
+    return mask
 
 def is_tok_valid(tok, field, vocab):
     tok = tok.tolist()
@@ -31,6 +98,10 @@ def get_field_from_idx(idx):
     """ Get the field of a given index (or indices) in a message
     """
     return Message_Tokenizer.get_field_from_idx(idx)
+
+def get_idx_from_field(field):
+    field_i = onp.argwhere(onp.array(Message_Tokenizer.FIELDS) == field).flatten()[0]
+    return LOBSTER_Dataset._get_tok_slice_i(field_i)
 
 def get_masked_fields(inp_maybe_batched):
     """ Get the fields of the masked tokens in a given input (batched or not)
@@ -157,6 +228,13 @@ def predict(
 
     return logits
 
+def filter_valid_pred(pred, valid_mask):
+    """ Filter the predicted distribution to only include valid tokens
+    """
+    pred = pred * valid_mask
+    pred = pred / pred.sum(axis=-1, keepdims=True)
+    return pred
+
 def pred_next_tok(
         seq,
         state,
@@ -167,6 +245,7 @@ def pred_next_tok(
         rng,
         vocab_len,
         new_msg=False,
+        valid_mask=None,  # if given, sample only from syntactically valid tokens
     ):
     """ Predict the next token with index i of the last message in the sequence
         if new_msg=True, a new empty message is appended to the sequence
@@ -185,16 +264,32 @@ def pred_next_tok(
     logits = predict(
         seq_onehot,
         integration_timesteps, state, model, batchnorm)
+    if valid_mask is not None:
+        logits = filter_valid_pred(logits, valid_mask)
     # update sequence
     # note: rng arg expects one element per batch element
     seq = fill_predicted_toks(seq, logits, sample_top_n, np.array([rng]))
     return seq
 
-def pred_msg(seq, n_messages, state, model, batchnorm, rng):
+
+
+def pred_msg(
+        seq: np.ndarray,
+        n_messages: int,
+        state: TrainState,
+        model: flax.linen.Module,
+        batchnorm: bool,
+        rng: PRNGKeyArray,
+        valid_mask_array: Optional[jax.Array] = None
+    ) -> np.ndarray:
+
+    valid_mask = None
     l = Message_Tokenizer.MSG_LEN
     for m_i in range(n_messages):
         new_msg = True
         for i in range(l):
+            if valid_mask_array is not None:
+                valid_mask = valid_mask_array[i]
             seq = pred_next_tok(
                 seq,
                 state,
@@ -205,6 +300,89 @@ def pred_msg(seq, n_messages, state, model, batchnorm, rng):
                 new_msg=new_msg,
                 vocab_len=len(v),
                 rng=rng,
+                valid_mask=valid_mask,
             )
             new_msg = False
     return seq
+
+def validate_msg(
+        msg: np.ndarray,
+        tok: Message_Tokenizer,
+        vocab: Vocab,
+    ) -> bool:
+    """ Validate a message's internal semantics
+        Assumes the message is syntactically valid (allowed toks in all places)
+        Returns True if valid
+    """
+    assert len(msg) == Message_Tokenizer.MSG_LEN
+    err_count = 0
+
+    msg_dec = tok.decode(msg, vocab).flatten()
+    fields = {fname: i for i, fname in enumerate(Message_Tokenizer.FIELDS)}
+    
+    time = msg_dec[fields['time']]
+    event_type = msg_dec[fields['event_type']]
+    event_type_new = msg_dec[fields['event_type_new']]
+    price = msg_dec[fields['price']]
+    direction = msg_dec[fields['direction']]
+
+    # if NA in second half, needs to be all NA
+    nas = np.isnan(msg[len(msg)//2:])
+    #nas = (msg[len(msg)//2:] == Vocab.NA_TOK)
+    err = np.any(nas) and not np.all(nas)
+    err_count += err
+    if err:
+        print("NAs must be in second half of message")
+
+    # decode message to str repr
+    #msg_str = tok.decode_to_str(msg, vocab).flatten()
+    # time within opening hours
+    #time = int(''.join(msg_str[slice(*get_idx_from_field("time"))]))
+    err = time > 57600000000000  # 16 * 3600 * 1e9
+    err_count += err
+    if err:
+        print("time after opening hours")
+
+    if event_type_new in {2, 3} and not np.isnan(direction):
+        direction_new = msg_dec[fields['direction_new']]
+        err = direction != direction_new
+        err_count += err
+        if err:
+            print("direction cannot be modified")
+        
+    # execution on bid side must be at price lvl 0
+    # note: execution of BUY order is on bid side
+    if event_type == 4 and direction == 1:
+        err = price != 0
+        err_count += err
+        if err:
+            print("execution on bid side must be at price lvl 0")
+    
+    return bool(err_count == 0)
+
+def find_orig_msg(
+        msg: jax.Array,
+        seq: jax.Array,
+    ) -> Optional[jax.Array]:
+    """ Finds first msg location in given seq.
+        NOTE: could also find earlier msg modifications, might not be the original new message
+              but we know at least that the message is in the sequence
+        Returns index of first token of msg in seq and None if msg is not found
+    """
+    occ = find_all_msg_occurances(msg, seq)
+    if len(occ) > 0:
+        return occ.flatten()[0]
+
+def find_all_msg_occurances(
+        msg: jax.Array,
+        seq: jax.Array,
+    ) -> jax.Array:
+    """ Finds ALL msg locations in given seq.
+        NOTE: could also find earlier msg modifications,
+              the original new message might not be included
+              but we know at least that the message is in the sequence.
+        Returns index of first token of msg in seq and None if msg is not found
+    """
+    l = Message_Tokenizer.MSG_LEN
+    seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))[:, :l//2]
+    return np.argwhere((seq == msg).all(axis=1))

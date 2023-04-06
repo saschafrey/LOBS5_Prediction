@@ -11,7 +11,7 @@ DATA_DIR = Path('../data/')
 
 DataLoader = TypeVar('DataLoader')
 InputType = [str, Optional[int], Optional[int]]
-ReturnType = Tuple[DataLoader, DataLoader, DataLoader, Dict, int, int, int, int]
+ReturnType = Tuple[LOBSTER, DataLoader, DataLoader, DataLoader, Dict, int, int, int, int]
 
 # Custom loading functions must therefore have the template.
 dataset_fn = Callable[[str, Optional[int], Optional[int]], ReturnType]
@@ -38,13 +38,14 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 
 	# TODO: make arg
 	# TODO: same number of workers for val and test? (currently 0)
-	num_workers = 4
+	num_workers = 16
 	# use sampler to only get individual samples and automatic batching from dataloader
-	trn_sampler = LOBSTER_Sampler(
-		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
+	#trn_sampler = LOBSTER_Sampler(
+	#		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	
-	trn_loader = make_data_loader(
-		dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
+	# trn_loader = make_data_loader(
+	# 	dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
+	trn_loader = create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False)
 	val_loader = make_data_loader(
 		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False, num_workers=0)
 	tst_loader = make_data_loader(
@@ -56,7 +57,22 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 	TRAIN_SIZE = len(dataset_obj.dataset_train)
 	aux_loaders = {}
 
-	return trn_loader, val_loader, tst_loader, aux_loaders, N_CLASSES, SEQ_LENGTH, IN_DIM, TRAIN_SIZE
+	return dataset_obj, trn_loader, val_loader, tst_loader, aux_loaders, N_CLASSES, SEQ_LENGTH, IN_DIM, TRAIN_SIZE
+
+def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False):
+	if reset_train_offsets:
+		dataset_obj.reset_train_offsets()
+	# use sampler to only get individual samples and automatic batching from dataloader
+	trn_sampler = LOBSTER_Sampler(
+		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
+	trn_loader = make_data_loader(
+		dataset_obj.dataset_train,
+		dataset_obj,
+		seed=seed,
+		batch_size=bsz,
+		sampler=trn_sampler,
+		num_workers=num_workers)
+	return trn_loader
 
 Datasets = {
 	# financial data

@@ -169,3 +169,4 @@ raw_datasets/
 data/
 
 checkpoints*/
+nohup.out

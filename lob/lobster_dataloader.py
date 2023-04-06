@@ -89,7 +89,10 @@ class LOBSTER_Dataset(Dataset):
             can be predicted in arbitrary order.
         """
         seq = seq.copy()
-        hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
+        #hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
+        #hidden_fields, msk_field = LOBSTER_Dataset._select_unconditional_mask(rng)
+        hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask(rng)
+
         i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
         msk_i = rng.integers(i_start, i_end)
         # select random token from last message from selected field
@@ -107,18 +110,34 @@ class LOBSTER_Dataset(Dataset):
     def _select_random_causal_mask(rng):
         """ Select random subset of fields and one field to mask
         """
-        n_fields = len(Message_Tokenizer.TOK_LENS)
-        # TODO: revert! for now, mask all fields except current one
-        # sel_fields = sorted(rng.choice(
-        #     list(range(n_fields)),
-        #     rng.integers(1, n_fields + 1),
-        #     replace=False
-        # ))
-        sel_fields = list(range(n_fields))
+        n_fields = len(Message_Tokenizer.FIELDS)
+        sel_fields = sorted(rng.choice(
+            list(range(n_fields)),
+            rng.integers(1, n_fields + 1),
+            replace=False
+        ))
 
         msk_field = rng.choice(sel_fields)
         sel_fields = list(set(sel_fields) - {msk_field})
         return sel_fields, msk_field
+
+    @staticmethod
+    def _select_unconditional_mask(rng):
+        """ Select only one field to mask and all other fields to be hidden
+        """
+        n_fields = len(Message_Tokenizer.FIELDS)
+        sel_fields = list(range(n_fields))
+        msk_field = sel_fields.pop(rng.integers(0, n_fields))
+        return sel_fields, msk_field
+
+    @staticmethod
+    def _select_sequential_causal_mask(rng):
+        """ Select tokens from start to random field for HID
+            followed by one MSK
+        """
+        n_fields = len(Message_Tokenizer.FIELDS)
+        msk_field = rng.integers(0, n_fields)
+        return tuple(range(msk_field)), msk_field
 
     @staticmethod
     def _get_tok_slice_i(field_i):
@@ -141,8 +160,7 @@ class LOBSTER_Dataset(Dataset):
         self.num_days = len(self.message_files)
         self.n_messages = n_messages
         
-        # keep first "n_buffer_files" of accessed files in memory for faster access
-        self.n_buffer_files = n_buffer_files
+        self.n_cache_files = n_buffer_files
         self._file_cache = OrderedDict()
         self.vocab = Vocab()
         self.seq_len = self.n_messages * Message_Tokenizer.MSG_LEN
@@ -186,7 +204,7 @@ class LOBSTER_Dataset(Dataset):
         file_idx, seq_idx = self._get_seq_location(idx)
         
         # load sequence from file directly without cache
-        if self.n_buffer_files == 0:
+        if self.n_cache_files == 0:
             X = np.load(self.message_files[file_idx], mmap_mode='r')
         else:
             if file_idx not in self._file_cache:
@@ -206,7 +224,7 @@ class LOBSTER_Dataset(Dataset):
         return X, y#, None
 
     def _add_to_cache(self, file_idx):
-        if len(self._file_cache) >= self.n_buffer_files:
+        if len(self._file_cache) >= self.n_cache_files:
             # remove item in FIFO order
             _ = self._file_cache.popitem(last=False)
             del _
@@ -442,15 +460,20 @@ class LOBSTER(SequenceDataset):
         n_test_files = max(1, int(len(message_files) * self.test_split))
 
         # train on first part of data
-        train_files = message_files[:len(message_files) - n_test_files]
+        self.train_files = message_files[:len(message_files) - n_test_files]
         # and test on last days
-        test_files = message_files[len(train_files):]
+        self.test_files = message_files[len(self.train_files):]
 
         self.rng = random.Random(self.seed)
 
-        # split into train/val in split_train_val()
+        # for now, just select (10%) days randomly for validation
+        self.val_files = [
+            self.train_files.pop(
+                self.rng.randrange(0, len(self.train_files))
+            ) for _ in range(int(np.ceil(self.val_split)))]
+
         self.dataset_train = LOBSTER_Dataset(
-            train_files,
+            self.train_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
@@ -463,10 +486,18 @@ class LOBSTER(SequenceDataset):
         # sequence length
         self.L = self.n_messages * Message_Tokenizer.MSG_LEN
 
-        self.split_train_val(self.val_split)
+        #self.split_train_val(self.val_split)
+        self.dataset_val = LOBSTER_Dataset(
+            self.val_files,
+            n_messages=self.n_messages,
+            mask_fn=self.mask_fn,
+            seed=self.rng.randint(0, sys.maxsize),
+            n_buffer_files=50,
+            randomize_offset=True,
+        )
 
         self.dataset_test = LOBSTER_Dataset(
-            test_files,
+            self.test_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
@@ -478,16 +509,52 @@ class LOBSTER(SequenceDataset):
         # decrease test size for now to run faster:
         #self.dataset_test = LOBSTER_Subset(self.dataset_test, range(int(0.1 * len(self.dataset_test))))
 
-    def split_train_val(self, val_split):
-        """ takes a random subset of training data as validation data
+    def reset_train_offsets(self):
+        """ reset the train dataset to a new random offset
+            (e.g. every training epoch)
+            keeps the same validation set and removes validation
+            indices from training set
         """
-        rng = random.Random(self.seed)
-        indices = list(range(len(self.dataset_train))) #np.arange(len(self.dataset_train))
-        val_len = int(np.ceil(val_split * len(indices)))
-        val_indices = [indices.pop(rng.randrange(0, len(indices))) for _ in range(val_len)]
+        # use a new seed for the train dataset to
+        # get a different random offset for each sequence for each epoch
+        self.dataset_train = LOBSTER_Dataset(
+            self.train_files,
+            n_messages=self.n_messages,
+            mask_fn=self.mask_fn,
+            seed=self.rng.randint(0, sys.maxsize),
+            n_buffer_files=50,
+            randomize_offset=True,
+        )
+    #     indices = [i for i in range(len(self.dataset_train)) if i not in self.val_indices]
+    #     # remove the first and last val sequence to avoid overlapping observations
+    #     indices.pop(self.val_indices[0])
+    #     indices.pop(self.val_indices[-1])
+    #     self.dataset_train = LOBSTER_Subset(self.dataset_train, indices)
+    
+    # def split_train_val(self, val_split):
+    #     """ takes one consecutive sequence as validation data,
+    #         dropping the previous and next sequence to avoid overlapping observations
+    #         with the training data.
+    #     """
+    #     rng = random.Random(self.seed)
+    #     indices = list(range(len(self.dataset_train))) #np.arange(len(self.dataset_train))
+    #     val_len = int(np.ceil(val_split * len(indices)))
+        
+    #     # randomly pick validation indices
+    #     #val_indices = [indices.pop(rng.randrange(0, len(indices))) for _ in range(val_len)]
+        
+    #     val_start = rng.randrange(0, len(indices) - val_len)
+    #     self.val_indices = [indices.pop(i) for i in range(val_start, val_start + val_len)]
+    #     # remove previous and subsequent sequence from training data
+    #     # this is to avoid overlapping observations with the validation data
+    #     # when offsets are reset
+    #     if val_start > 0:
+    #         indices.pop(val_start - 1)
+    #     if val_start + val_len < len(indices):
+    #         indices.pop(val_start + val_len)
 
-        self.dataset_val = LOBSTER_Subset(self.dataset_train, val_indices)
-        self.dataset_train = LOBSTER_Subset(self.dataset_train, indices)
+    #     self.dataset_val = LOBSTER_Subset(self.dataset_train, self.val_indices)
+    #     self.dataset_train = LOBSTER_Subset(self.dataset_train, indices)
 
     '''
     def split_train_val(self, val_split):

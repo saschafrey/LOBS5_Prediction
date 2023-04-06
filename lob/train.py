@@ -7,7 +7,7 @@ import orbax.checkpoint
 from lob.lob_seq_model import BatchLobPredModel
 import wandb
 
-from .dataloading import Datasets
+from .dataloading import Datasets, create_lobster_train_loader
 from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
@@ -56,7 +56,7 @@ def train(args):
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
     mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
-    trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
+    lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
       create_dataset_fn(args.dir_name, seed=args.jax_seed, mask_fn=mask_fn, bsz=args.bsz)
 
     #print("in_dim", in_dim)  # 20
@@ -169,6 +169,14 @@ def train(args):
                                               in_dim,
                                               args.batchnorm,
                                               lr_params)
+        # reinit training loader, so that sequences are initialised with
+        # different offsets
+        trainloader = create_lobster_train_loader(
+            lobster_dataset,
+            int(random.randint(skey, (1,), 0, 100000)),
+            args.bsz,
+            num_workers=16,
+            reset_train_offsets=True)
 
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation...")
