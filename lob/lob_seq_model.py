@@ -1,8 +1,9 @@
+from functools import partial
 from typing import Tuple
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
-#from ..s5.layers import SequenceLayer
+from s5.layers import SequenceLayer
 from s5.seq_model import StackedEncoderModel, masked_meanpool
 
 
@@ -31,7 +32,6 @@ class LobPredModel(nn.Module):
     """
     ssm: nn.Module
     d_output: int
-    #output_dims: Tuple[int]  # dimensions of different output classes
     d_model: int
     n_layers: int
     padded: bool
@@ -98,6 +98,168 @@ class LobPredModel(nn.Module):
 BatchLobPredModel = nn.vmap(
     LobPredModel,
     in_axes=(0, 0),
+    out_axes=0,
+    variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
+    split_rngs={"params": False, "dropout": True}, axis_name='batch')
+
+
+class LobBookModel(nn.Module):
+    ssm: nn.Module
+    d_book: int
+    d_model: int
+    #n_layers: int
+    activation: str = "gelu"
+    dropout: float = 0.0
+    training: bool = True
+    prenorm: bool = False
+    batchnorm: bool = False
+    bn_momentum: float = 0.9
+    step_rescale: float = 1.0
+
+    def setup(self):
+        """
+        Initializes ...
+        """
+        self.layers = [
+            SequenceLayer(
+                # fix ssm init to correct shape (different than other layers)
+                ssm=partial(self.ssm, H=self.d_book),
+                dropout=self.dropout,
+                d_model=self.d_book,  # take book series as is
+                activation=self.activation,
+                training=self.training,
+                prenorm=self.prenorm,
+                batchnorm=self.batchnorm,
+                bn_momentum=self.bn_momentum,
+                step_rescale=self.step_rescale,
+            ),
+            nn.Dense(self.d_model),  # project to d_model
+            SequenceLayer(
+                ssm=self.ssm,
+                dropout=self.dropout,
+                d_model=self.d_model,
+                activation=self.activation,
+                training=self.training,
+                prenorm=self.prenorm,
+                batchnorm=self.batchnorm,
+                bn_momentum=self.bn_momentum,
+                step_rescale=self.step_rescale,
+            ),
+        ]
+
+    def __call__(self, x, integration_timesteps):
+        """
+        Compute the LxH output of the stacked encoder given an Lxd_input
+        input sequence.
+        Args:
+             x (float32): input sequence (L, d_input)
+        Returns:
+            output sequence (float32): (L, d_model)
+        """
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+class FullLobPredModel(nn.Module):
+    ssm: nn.Module
+    d_output: int
+    d_model: int
+    d_book: int
+    n_message_layers: int
+    n_fused_layers: int
+    activation: str = "gelu"
+    dropout: float = 0.2
+    training: bool = True
+    mode: str = "pool"
+    prenorm: bool = False
+    batchnorm: bool = False
+    bn_momentum: float = 0.9
+    step_rescale: float = 1.0
+
+    def setup(self):
+        """
+        Initializes the S5 stacked encoder and a linear decoder.
+        """
+        self.message_encoder = StackedEncoderModel(
+            ssm=self.ssm,
+            d_model=self.d_model,
+            n_layers=self.n_message_layers,
+            activation=self.activation,
+            dropout=self.dropout,
+            training=self.training,
+            prenorm=self.prenorm,
+            batchnorm=self.batchnorm,
+            bn_momentum=self.bn_momentum,
+            step_rescale=self.step_rescale,
+        )
+        # applied to transposed message output to get seq len for fusion
+        self.message_out_proj = nn.Dense(self.d_model)  
+        self.book_encoder = LobBookModel(
+            ssm=self.ssm,
+            d_book=self.d_book,
+            d_model=self.d_model,
+            #n_layers=self.n_layers,
+            activation=self.activation,
+            dropout=self.dropout,
+            training=self.training,
+            prenorm=self.prenorm,
+            batchnorm=self.batchnorm,
+            bn_momentum=self.bn_momentum,
+            step_rescale=self.step_rescale,
+        )
+        # applied to transposed book output to get seq len for fusion
+        self.book_out_proj = nn.Dense(self.d_model)
+        self.fused_s5 = StackedEncoderModel(
+            ssm=self.ssm,
+            d_model=self.d_model,
+            n_layers=self.n_fused_layers,
+            activation=self.activation,
+            dropout=self.dropout,
+            training=self.training,
+            prenorm=self.prenorm,
+            batchnorm=self.batchnorm,
+            bn_momentum=self.bn_momentum,
+            step_rescale=self.step_rescale,
+        )
+        self.decoder = nn.Dense(self.d_output)
+
+    def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+        """
+        Compute the size d_output log softmax output given a
+        (L_m x d_input, L_b x [P+1]) input sequence tuple,
+        combining message and book inputs.
+        Args:
+             x (float32): 2-tuple of input sequences (L_m x d_input, L_b x [P+1])
+        Returns:
+            output (float32): (d_output)
+        """
+        #x_m, x_b = x
+        # print(x_m.shape, x_b.shape)
+
+        x_m = self.message_encoder(x_m, message_integration_timesteps)
+        # TODO: check integration time steps make sense here
+        x_b = self.book_encoder(x_b, book_integration_timesteps)
+
+        x_m = self.message_out_proj(x_m.T).T
+        x_b = self.book_out_proj(x_b.T).T
+        x = jnp.concatenate([x_m, x_b], axis=0)
+        # TODO: again, check integration time steps make sense here
+        x = self.fused_s5(x, jnp.ones(x.shape[0]))
+
+        if self.mode in ["pool"]:
+            x = jnp.mean(x, axis=0)
+        elif self.mode in ["last"]:
+            x = x[-1]
+        else:
+            raise NotImplementedError("Mode must be in ['pool', 'last]")
+
+        x = self.decoder(x)
+        return nn.log_softmax(x, axis=-1)
+
+# Here we call vmap to parallelize across a batch of input sequences
+BatchFullLobPredModel = nn.vmap(
+    FullLobPredModel,
+    in_axes=(0, 0, 0, 0),
     out_axes=0,
     variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
     split_rngs={"params": False, "dropout": True}, axis_name='batch')

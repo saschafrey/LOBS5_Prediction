@@ -4,10 +4,10 @@ import jax.numpy as np
 from jax.scipy.linalg import block_diag
 from flax.training import checkpoints
 import orbax.checkpoint
-from lob.lob_seq_model import BatchLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel
 import wandb
 
-from .dataloading import Datasets, create_lobster_train_loader
+from .dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
 from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
@@ -46,7 +46,7 @@ def train(args):
 
     # Get dataset creation function
     ds = 'lobster-prediction'
-    create_dataset_fn = Datasets[ds]
+    #create_dataset_fn =  Datasets[ds]
 
     # Dataset dependent logic
     padded = False
@@ -56,8 +56,15 @@ def train(args):
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
     mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
-    lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
-      create_dataset_fn(args.dir_name, seed=args.jax_seed, mask_fn=mask_fn, bsz=args.bsz)
+    (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, 
+        n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
+        create_lobster_prediction_dataset(
+            args.dir_name,
+            seed=args.jax_seed,
+            mask_fn=mask_fn,
+            bsz=args.bsz,
+            use_book_data=args.use_book_data,
+        )
 
     #print("in_dim", in_dim)  # 20
     #print("n_classes", n_classes)  # 20
@@ -100,29 +107,49 @@ def train(args):
                              conj_sym=args.conj_sym,
                              clip_eigs=args.clip_eigs,
                              bidirectional=args.bidirectional)
-
-
-    model_cls = partial(
-        BatchLobPredModel,
-        ssm=ssm_init_fn,
-        d_output=n_classes,
-        d_model=args.d_model,
-        n_layers=args.n_layers,
-        padded=padded,
-        activation=args.activation_fn,
-        dropout=args.p_dropout,
-        mode=args.mode,
-        prenorm=args.prenorm,
-        batchnorm=args.batchnorm,
-        bn_momentum=args.bn_momentum,
-    )
+    print("book_seq_len", book_seq_len)
+    print("book_dim", book_dim)
+    if args.use_book_data:
+        model_cls = partial(
+            BatchFullLobPredModel,
+            ssm=ssm_init_fn,
+            d_output=n_classes,
+            d_model=args.d_model,
+            d_book=book_dim,
+            n_message_layers=2,  # TODO: make this an arg
+            n_fused_layers=args.n_layers,
+            activation=args.activation_fn,
+            dropout=args.p_dropout,
+            mode=args.mode,
+            prenorm=args.prenorm,
+            batchnorm=args.batchnorm,
+            bn_momentum=args.bn_momentum,
+        )
+    else:
+        model_cls = partial(
+            BatchLobPredModel,
+            ssm=ssm_init_fn,
+            d_output=n_classes,
+            d_model=args.d_model,
+            n_layers=args.n_layers,
+            padded=padded,
+            activation=args.activation_fn,
+            dropout=args.p_dropout,
+            mode=args.mode,
+            prenorm=args.prenorm,
+            batchnorm=args.batchnorm,
+            bn_momentum=args.bn_momentum,
+        )
 
     # initialize training state
     state = create_train_state(model_cls,
                                init_rng,
                                padded,
                                retrieval,
+                               use_book_data=args.use_book_data,
                                in_dim=in_dim,
+                               book_dim=book_dim,
+                               book_seq_len=book_seq_len,
                                bsz=args.bsz,
                                seq_len=seq_len,
                                weight_decay=args.weight_decay,

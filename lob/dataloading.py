@@ -11,16 +11,19 @@ DATA_DIR = Path('../data/')
 
 DataLoader = TypeVar('DataLoader')
 InputType = [str, Optional[int], Optional[int]]
-ReturnType = Tuple[LOBSTER, DataLoader, DataLoader, DataLoader, Dict, int, int, int, int]
+ReturnType = Tuple[LOBSTER, DataLoader, DataLoader, DataLoader, Dict, int, int, int, int, int, int]
 
 # Custom loading functions must therefore have the template.
 dataset_fn = Callable[[str, Optional[int], Optional[int]], ReturnType]
 
 
-def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
-									  seed: int = 42,
-									  mask_fn = LOBSTER_Dataset.causal_mask,
-									  bsz: int=128) -> ReturnType:
+def create_lobster_prediction_dataset(
+		cache_dir: Union[str, Path] = DATA_DIR,
+		seed: int = 42,
+		mask_fn = LOBSTER_Dataset.causal_mask,
+		bsz: int=128,
+		use_book_data: bool = False,
+	) -> ReturnType:
 	""" 
 	"""
 
@@ -28,12 +31,17 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 	from .lobster_dataloader import LOBSTER
 	name = 'lobster'
 
-	kwargs = {
-		'permute': True,
-		"mask_fn": mask_fn
-	}
+	# kwargs = {
+	# 	#'permute': True,
+	# 	"mask_fn": mask_fn
+	# }
 
-	dataset_obj = LOBSTER(name, data_dir=cache_dir, **kwargs)
+	dataset_obj = LOBSTER(
+		name,
+		data_dir=cache_dir,
+		mask_fn=mask_fn,
+		use_book_data=use_book_data
+	)
 	dataset_obj.setup()
 
 	# TODO: make arg
@@ -57,7 +65,11 @@ def create_lobster_prediction_dataset(cache_dir: Union[str, Path] = DATA_DIR,
 	TRAIN_SIZE = len(dataset_obj.dataset_train)
 	aux_loaders = {}
 
-	return dataset_obj, trn_loader, val_loader, tst_loader, aux_loaders, N_CLASSES, SEQ_LENGTH, IN_DIM, TRAIN_SIZE
+	BOOK_SEQ_LEN = dataset_obj.L_book
+	BOOK_DIM = dataset_obj.d_book
+
+	return (dataset_obj, trn_loader, val_loader, tst_loader, aux_loaders, 
+	 		N_CLASSES, SEQ_LENGTH, IN_DIM, BOOK_SEQ_LEN, BOOK_DIM, TRAIN_SIZE)
 
 def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False):
 	if reset_train_offsets:

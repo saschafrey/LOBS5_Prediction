@@ -37,6 +37,8 @@ if __name__ == "__main__":
 	parser.add_argument("--masking", type=str, choices={'causal', 'random'},
 						default='causal',  # random
 						help="causal or random masking of sequences")
+	parser.add_argument("--use_book_data", type=str2bool, default=False,
+		     			help="use book data in addition to message data")
 
 	# Model Parameters
 	parser.add_argument("--n_layers", type=int, default=6,  #6

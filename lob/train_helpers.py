@@ -87,6 +87,9 @@ def create_train_state(model_cls,
                        rng,
                        padded,
                        retrieval,
+                       use_book_data,
+                       book_dim,
+                       book_seq_len,
                        in_dim=1,
                        bsz=128,
                        seq_len=784,
@@ -125,14 +128,24 @@ def create_train_state(model_cls,
             dummy_input = (np.ones((bsz, seq_len, in_dim)), np.ones(bsz))
             integration_timesteps = np.ones((bsz, seq_len,))
     else:
-        dummy_input = np.ones((bsz, seq_len, in_dim))
-        integration_timesteps = np.ones((bsz, seq_len, ))
+        if use_book_data:
+            dummy_input = (
+                np.ones((bsz, seq_len, in_dim)),
+                np.ones((bsz, book_seq_len, book_dim)),
+            )
+            integration_timesteps = (
+                np.ones((bsz, seq_len, )),
+                np.ones((bsz, book_seq_len, )),
+            )
+        else:
+            dummy_input = (np.ones((bsz, seq_len, in_dim)) , )
+            integration_timesteps = (np.ones((bsz, seq_len, )), )
 
     model = model_cls(training=True)
     init_rng, dropout_rng = jax.random.split(rng, num=2)
     variables = model.init({"params": init_rng,
                             "dropout": dropout_rng},
-                           dummy_input, integration_timesteps,
+                           *dummy_input, *integration_timesteps,
                            )
     if batchnorm:
         params = variables["params"].unfreeze()
@@ -333,7 +346,7 @@ def weighted_accuracy_and_rmse(
 
 def prep_batch(batch: tuple,
                seq_len: int,
-               in_dim: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+               in_dim: int) -> Tuple[Tuple, np.ndarray, Tuple]:
     """
     Take a batch and convert it to a standard x/y format.
     :param batch:       (x, y, aux_data) as returned from dataloader.
@@ -349,19 +362,7 @@ def prep_batch(batch: tuple,
     else:
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
-    # Convert to JAX.
-    #inputs = np.asarray(inputs.numpy())
-    #print(inputs.shape)
-
-    # Grab lengths from aux if it is there.
-    lengths = aux_data.get('lengths', None)
-
     assert inputs.shape[1] == seq_len
-    # Make all batches have same sequence length
-    #num_pad = seq_len - inputs.shape[1]
-    #if num_pad > 0:
-        # Assuming vocab padding value is zero
-    #    inputs = np.pad(inputs, ((0, 0), (0, num_pad)), 'constant', constant_values=(0,))
 
     # Inputs is either [n_batch, seq_len] or [n_batch, seq_len, in_dim].
     # If there are not three dimensions and trailing dimension is not equal to in_dim then
@@ -369,24 +370,22 @@ def prep_batch(batch: tuple,
     if (inputs.ndim < 3) and (inputs.shape[-1] != in_dim):
         inputs = one_hot(np.asarray(inputs), in_dim)
 
-    # If there are lengths, bundle them up.
-    if lengths is not None:
-        lengths = np.asarray(lengths.numpy())
-        full_inputs = (inputs.astype(float), lengths.astype(float))
-    else:
-        full_inputs = inputs.astype(float)
-
-    # Convert and apply.
-    #targets = np.array(targets.numpy())
-    targets = np.squeeze(targets)
-
     # If there is an aux channel containing the integration times, then add that.
-    if 'timesteps' in aux_data.keys():
-        integration_timesteps = np.diff(np.asarray(aux_data['timesteps'].numpy()))
+    if 'timesteps_msg' in aux_data:
+        integration_timesteps = (np.diff(aux_data['timesteps_msg']), )
     else:
-        integration_timesteps = np.ones((len(inputs), seq_len))
+        integration_timesteps = (np.ones((len(inputs), seq_len)), )
 
-    return full_inputs, targets.astype(float), integration_timesteps
+    if "book_data" in aux_data:
+        full_inputs = (inputs.astype(float), aux_data['book_data'])
+        if "timesteps_book" in aux_data:
+            integration_timesteps += (np.diff(aux_data['timesteps_book']), )
+        else:
+            integration_timesteps += (np.ones((len(inputs), seq_len)), )
+    else:
+        full_inputs = (inputs.astype(float), )
+
+    return full_inputs, np.squeeze(targets.astype(float)), integration_timesteps
 
 
 def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params):
@@ -433,7 +432,6 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
         loss, acc, pred = eval_step(
-            #inputs, labels, integration_timesteps, state, model, split_indices, batchnorm)
             inputs, labels, integration_timesteps, state, model, batchnorm)
         losses = np.append(losses, loss)
         accuracies = np.append(accuracies, acc)
@@ -451,20 +449,23 @@ def train_step(state,
                model,
                batchnorm,
                ):
-    """Performs a single training step given a batch of data"""
+    """ Performs a single training step given a batch of data
+        NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
+              or only (batched_message_inputs,) if book inputs are not used.
+    """
     def loss_fn(params):
 
         if batchnorm:
             logits, mod_vars = model.apply(
                 {"params": params, "batch_stats": state.batch_stats},
-                batch_inputs, batch_integration_timesteps,
+                *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates", "batch_stats"],
             )
         else:
             logits, mod_vars = model.apply(
                 {"params": params},
-                batch_inputs, batch_integration_timesteps,
+                *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates"],
             )
@@ -506,11 +507,11 @@ def eval_step(batch_inputs,
               ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
-                             batch_inputs, batch_integration_timesteps,
+                             *batch_inputs, *batch_integration_timesteps,
                              )
     else:
         logits = model.apply({"params": state.params},
-                             batch_inputs, batch_integration_timesteps,
+                             *batch_inputs, *batch_integration_timesteps,
                              )
 
     #losses = cross_entropy_loss(logits, batch_labels) / (len(split_indices) + 1)
