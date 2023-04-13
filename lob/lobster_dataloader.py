@@ -206,11 +206,10 @@ class LOBSTER_Dataset(Dataset):
         """
         if self.randomize_offset:
             self.seq_offsets = {
-                # offset of 1 is required to always have a book state before the message
-                i: self.rng.integers(1, self.n_messages) 
+                i: self.rng.integers(0, self.n_messages) 
                 for i in range(len(self.message_files))}
         else:
-            self.seq_offsets = {i: 1 for i in range(len(self.message_files))}
+            self.seq_offsets = {i: 0 for i in range(len(self.message_files))}
 
     @property
     def shape(self):
@@ -249,7 +248,9 @@ class LOBSTER_Dataset(Dataset):
         # TODO: look into aux_data (could we still use time when available?)
 
         if self.use_book_data:
-            book = book[seq_start - 1: seq_end - 1]#.reshape(-1)
+            # first message is already dropped, so we can use
+            # the book state with the same index (prior to the message)
+            book = book[seq_start: seq_end]#.reshape(-1)
             ret_tuple = X, y, book
         else:
             ret_tuple = X, y

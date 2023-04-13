@@ -219,11 +219,11 @@ def predict(
     ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
-                             batch_inputs, batch_integration_timesteps,
+                             *batch_inputs, *batch_integration_timesteps,
                              )
     else:
         logits = model.apply({"params": state.params},
-                             batch_inputs, batch_integration_timesteps,
+                             *batch_inputs, *batch_integration_timesteps,
                              )
 
     return logits
@@ -235,6 +235,10 @@ def filter_valid_pred(pred, valid_mask):
     pred = pred / pred.sum(axis=-1, keepdims=True)
     return pred
 
+
+# TODO: factor out new message creation into separate fn
+#       use simulator to update book_seq (separate fn)
+#       
 def pred_next_tok(
         seq,
         state,
@@ -244,25 +248,29 @@ def pred_next_tok(
         mask_i,
         rng,
         vocab_len,
+        book_seq=None,
         new_msg=False,
         valid_mask=None,  # if given, sample only from syntactically valid tokens
     ):
     """ Predict the next token with index i of the last message in the sequence
         if new_msg=True, a new empty message is appended to the sequence
         Returns the updated sequence
-        TODO: add flag to only sample from syntactically valid tokens
     """
-
     # create masked message for prediction
     if new_msg:
         seq = append_hid_msg(seq)
+        # TODO: use simulator to update book_seq
     seq, _ = mask_last_msg_in_seq(seq, mask_i)
     # inference
-    integration_timesteps = np.ones((1, len(seq)))
-    seq_onehot = nn.one_hot(
-        np.expand_dims(seq, axis=0), vocab_len).astype(float)
+    integration_timesteps = (np.ones((1, len(seq))), )
+    input = (nn.one_hot(
+        np.expand_dims(seq, axis=0), vocab_len).astype(float), )
+    # append book data to input tuples
+    if book_seq is not None:
+        input += (book_seq, )
+        integration_timesteps += (np.ones((1, len(book_seq))), )
     logits = predict(
-        seq_onehot,
+        input,
         integration_timesteps, state, model, batchnorm)
     if valid_mask is not None:
         logits = filter_valid_pred(logits, valid_mask)
@@ -272,7 +280,6 @@ def pred_next_tok(
     return seq
 
 
-
 def pred_msg(
         seq: np.ndarray,
         n_messages: int,
@@ -280,7 +287,8 @@ def pred_msg(
         model: flax.linen.Module,
         batchnorm: bool,
         rng: PRNGKeyArray,
-        valid_mask_array: Optional[jax.Array] = None
+        valid_mask_array: Optional[jax.Array] = None,
+        sample_top_n: int = 5,
     ) -> np.ndarray:
 
     valid_mask = None
@@ -295,7 +303,7 @@ def pred_msg(
                 state,
                 model,
                 batchnorm,
-                sample_top_n=5,
+                sample_top_n=sample_top_n,
                 mask_i=i,
                 new_msg=new_msg,
                 vocab_len=len(v),
