@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer, Vocab
+import pandas as pd
 import jax
 from jax import nn
 from jax.random import PRNGKeyArray
@@ -14,12 +15,13 @@ from lob.lobster_dataloader import LOBSTER_Dataset
 v = Vocab()
 
 
-def syntax_validation_matrix():
+def syntax_validation_matrix(v = None):
     """ Create a matrix of shape (MSG_LEN, VOCAB_SIZE) where a
         True value indicates that the token is valid for the location
         in the message.
     """
-    v = Vocab()
+    if v is None:
+        v = Vocab()
 
     idx = []
     for i in range(Message_Tokenizer.MSG_LEN):
@@ -186,7 +188,7 @@ def sample_pred(pred, top_n, rng):
     """
     mask_top_n = mask_n_highest(pred, top_n)
     idx = np.arange(pred.shape[0]).reshape(pred.shape)
-    p = pred * mask_top_n
+    p = np.exp(pred) * mask_top_n
     p = p / p.sum(axis=-1, keepdims=True)
     return jax.random.choice(rng, idx, p=p)
 
@@ -219,8 +221,8 @@ def predict(
     ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
-                             *batch_inputs, *batch_integration_timesteps,
-                             )
+                            *batch_inputs, *batch_integration_timesteps,
+                            )
     else:
         logits = model.apply({"params": state.params},
                              *batch_inputs, *batch_integration_timesteps,
@@ -231,14 +233,18 @@ def predict(
 def filter_valid_pred(pred, valid_mask):
     """ Filter the predicted distribution to only include valid tokens
     """
-    pred = pred * valid_mask
-    pred = pred / pred.sum(axis=-1, keepdims=True)
+    #pred = pred * valid_mask
+    # TODO: match shape
+    pred = pred.at[np.tile(valid_mask, (pred.shape[0], 1)) == 0].set(-9999)
+    #pred = pred / pred.sum(axis=-1, keepdims=True)
+    # renormalize
+    pred = pred - np.log(np.sum(np.exp(pred), axis=-1, keepdims=True))
     return pred
 
 
 # TODO: factor out new message creation into separate fn
 #       use simulator to update book_seq (separate fn)
-#       
+#
 def pred_next_tok(
         seq,
         state,
@@ -371,15 +377,17 @@ def validate_msg(
 def find_orig_msg(
         msg: jax.Array,
         seq: jax.Array,
-    ) -> Optional[jax.Array]:
+    ) -> Optional[int]:
     """ Finds first msg location in given seq.
         NOTE: could also find earlier msg modifications, might not be the original new message
               but we know at least that the message is in the sequence
+        :param msg: message to find (only first/orig half of message)
+        :param seq: sequence of messages to search in
         Returns index of first token of msg in seq and None if msg is not found
     """
     occ = find_all_msg_occurances(msg, seq)
     if len(occ) > 0:
-        return occ.flatten()[0]
+        return int(occ.flatten()[0])
 
 def find_all_msg_occurances(
         msg: jax.Array,
@@ -394,3 +402,19 @@ def find_all_msg_occurances(
     l = Message_Tokenizer.MSG_LEN
     seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))[:, :l//2]
     return np.argwhere((seq == msg).all(axis=1))
+
+def find_all_msg_occurances_raw(
+        msg: onp.ndarray,
+        seq: pd.DataFrame,
+    ) -> pd.DataFrame:
+    """ Finds ALL msg locations in given seq.
+        This version searches in the raw dataframe instead of the encoded jax array.
+        Benefit: can find messages that occur before encoded sequece starts
+                 and we also get the order ID directly
+        Downsides: data needs to be in raw format (e.g. price, time)
+        NOTE: could also find earlier msg modifications,
+              the original new message might not be included
+              but we know at least that the message is in the sequence.
+        Returns index of first token of msg in seq and None if msg is not found
+    """
+    return seq.loc[(seq.drop('order_id', axis=1) == msg).all(axis=1)]

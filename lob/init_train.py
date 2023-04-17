@@ -1,16 +1,18 @@
+from __future__ import annotations
 from argparse import Namespace
 from glob import glob
 from functools import partial
-from typing import Optional
+from typing import Optional, Tuple, Union
 import jax
 import jax.numpy as np
 from jax import random
 from flax.training.train_state import TrainState
 from jax.scipy.linalg import block_diag
 from flax.training import checkpoints
+from flax import linen as nn
 from orbax import checkpoint
 from lob.encoding import Vocab
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, FullLobPredModel
 
 #from lob.lob_seq_model import BatchLobPredModel
 from lob.train_helpers import create_train_state, eval_step, prep_batch, cross_entropy_loss, compute_accuracy
@@ -73,7 +75,7 @@ def init_train_state(
         book_dim: int,
         book_seq_len,
         print_shapes=False
-    ) -> TrainState:
+    ) -> Tuple[TrainState, Union[partial[BatchLobPredModel], partial[FullLobPredModel]]]:
 
     in_dim = n_classes
 
@@ -185,4 +187,4 @@ def init_train_state(
         dt_global=args.dt_global
     )
 
-    return state
+    return state, model_cls

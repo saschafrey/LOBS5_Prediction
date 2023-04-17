@@ -137,7 +137,8 @@ class LOBSTER_Dataset(Dataset):
         """
         n_fields = len(Message_Tokenizer.FIELDS)
         msk_field = rng.integers(0, n_fields)
-        return tuple(range(msk_field)), msk_field
+        #return tuple(range(msk_field)), msk_field
+        return tuple(range(msk_field + 1, n_fields)), msk_field
 
     @staticmethod
     def _get_tok_slice_i(field_i):
@@ -263,9 +264,9 @@ class LOBSTER_Dataset(Dataset):
             _ = self._message_cache.popitem(last=False)
             _ = self._book_cache.popitem(last=False)
             del _
-        Xm = np.load(self.message_files[file_idx], mmap_mode='r')
+        Xm = np.load(self.message_files[file_idx])#, mmap_mode='r')
         self._message_cache[file_idx] = Xm
-        Xb = np.load(self.book_files[file_idx], mmap_mode='r')
+        Xb = np.load(self.book_files[file_idx])#, mmap_mode='r')
         self._book_cache[file_idx] = Xb
 
     '''
