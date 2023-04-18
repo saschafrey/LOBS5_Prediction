@@ -12,7 +12,7 @@ from flax.training import checkpoints
 from flax import linen as nn
 from orbax import checkpoint
 from lob.encoding import Vocab
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, FullLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel, FullLobPredModel
 
 #from lob.lob_seq_model import BatchLobPredModel
 from lob.train_helpers import create_train_state, eval_step, prep_batch, cross_entropy_loss, compute_accuracy
@@ -21,7 +21,7 @@ from s5.ssm_init import make_DPLR_HiPPO
 from s5.dataloading import make_data_loader
 from lob.lobster_dataloader import LOBSTER_Dataset, LOBSTER
 
-import validation_helpers as valh
+import lob.validation_helpers as valh
 
 
 def load_args_from_checkpoint(
@@ -137,7 +137,9 @@ def init_train_state(
     
     if args.use_book_data:
         model_cls = partial(
+            # TODO: decide on model architecture
             BatchFullLobPredModel,
+            #BatchPaddedLobPredModel,
             ssm=ssm_init_fn,
             d_output=n_classes,
             d_model=args.d_model,

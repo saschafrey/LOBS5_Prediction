@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 import numpy as np
 import pandas as pd
 from tqdm.notebook import tqdm
@@ -34,7 +35,7 @@ def process_message_files(
         )
         if filter_above_lvl:
             book = book.iloc[:, :filter_above_lvl * 4]
-            messages = filter_messages_by_lvl(messages, book, filter_above_lvl)
+            messages, book = filter_by_lvl(messages, book, filter_above_lvl)
         
         print('<< pre processing >>')
         m_ = tok.preproc(messages, book)
@@ -56,20 +57,25 @@ def get_price_range_for_level(
     p_range.columns = ['p_max', 'p_min']
     return p_range
 
-def filter_messages_by_lvl(
+def filter_by_lvl(
         messages: pd.DataFrame,
         book: pd.DataFrame,
         lvl: int
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+
+    assert messages.shape[0] == book.shape[0]
     p_range = get_price_range_for_level(book, lvl)
-    return messages[(messages.price <= p_range.p_max) & (messages.price >= p_range.p_min)]
+    messages = messages[(messages.price <= p_range.p_max) & (messages.price >= p_range.p_min)]
+    book = book.loc[messages.index]
+    return messages, book
 
 
 def process_book_files(
         message_files: list[str],
         book_files: list[str],
         save_dir: str,
-        price_levels: int,
+        filter_above_lvl: int,
+        n_price_series: int,
         allowed_events=[1, 2, 3, 4]
     ) -> None:
 
@@ -88,11 +94,14 @@ def process_book_files(
             header=None
         )
 
-        # remove diallowed order types
+        # remove disallowed order types
         messages = messages.loc[messages.event_type.isin(allowed_events)]
         book = book.loc[messages.index]
 
-        book = process_book(book, price_levels=price_levels)
+        messages, book = filter_by_lvl(messages, book, filter_above_lvl)
+
+        # convert to n_price_series separate volume time series (each tick is a price level)
+        book = process_book(book, price_levels=n_price_series)
         b_path = save_dir + b_f.rsplit('/', maxsplit=1)[-1][:-4] + '_proc.npy'
         np.save(b_path, book, allow_pickle=True)
 

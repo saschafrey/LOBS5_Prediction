@@ -39,6 +39,9 @@ if __name__ == "__main__":
 						help="causal or random masking of sequences")
 	parser.add_argument("--use_book_data", type=str2bool, default=False,
 		     			help="use book data in addition to message data")
+	parser.add_argument("--restore", type=str,
+		     			help="if given restore from given checkpoint dir")
+	parser.add_argument("--restore_step", type=int)
 
 	# Model Parameters
 	parser.add_argument("--n_layers", type=int, default=6,  #6
