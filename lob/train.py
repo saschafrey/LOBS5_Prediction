@@ -4,9 +4,10 @@ import jax.numpy as np
 from jax.scipy.linalg import block_diag
 from flax.training import checkpoints
 import orbax.checkpoint
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel
 import wandb
 
+from .init_train import init_train_state, load_checkpoint
 from .dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
 from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
@@ -48,11 +49,6 @@ def train(args):
     ds = 'lobster-prediction'
     #create_dataset_fn =  Datasets[ds]
 
-    # Dataset dependent logic
-    padded = False
-    retrieval = False
-    speech = False
-
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
     mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
@@ -66,98 +62,26 @@ def train(args):
             use_book_data=args.use_book_data,
         )
 
-    #print("in_dim", in_dim)  # 20
-    #print("n_classes", n_classes)  # 20
-    #import sys
-    #sys.exit()
-
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
 
-    # Initialize state matrix A using approximation to HiPPO-LegS matrix
-    Lambda, _, B, V, B_orig = make_DPLR_HiPPO(block_size)
+    state, model_cls = init_train_state(
+        args,
+        n_classes=n_classes,
+        seq_len=seq_len,
+        book_dim=book_dim,
+        book_seq_len=book_seq_len,
+        print_shapes=True
+    )
 
-    if args.conj_sym:
-        block_size = block_size // 2
-        ssm_size = ssm_size // 2
-
-    Lambda = Lambda[:block_size]
-    V = V[:, :block_size]
-    Vc = V.conj().T
-
-    # If initializing state matrix A as block-diagonal, put HiPPO approximation
-    # on each block
-    Lambda = (Lambda * np.ones((args.blocks, block_size))).ravel()
-    V = block_diag(*([V] * args.blocks))
-    Vinv = block_diag(*([Vc] * args.blocks))
-
-    print("Lambda.shape={}".format(Lambda.shape))
-    print("V.shape={}".format(V.shape))
-    print("Vinv.shape={}".format(Vinv.shape))
-
-    ssm_init_fn = init_S5SSM(H=args.d_model,
-                             P=ssm_size,
-                             Lambda_re_init=Lambda.real,
-                             Lambda_im_init=Lambda.imag,
-                             V=V,
-                             Vinv=Vinv,
-                             C_init=args.C_init,
-                             discretization=args.discretization,
-                             dt_min=args.dt_min,
-                             dt_max=args.dt_max,
-                             conj_sym=args.conj_sym,
-                             clip_eigs=args.clip_eigs,
-                             bidirectional=args.bidirectional)
-    print("book_seq_len", book_seq_len)
-    print("book_dim", book_dim)
-    if args.use_book_data:
-        model_cls = partial(
-            BatchFullLobPredModel,
-            ssm=ssm_init_fn,
-            d_output=n_classes,
-            d_model=args.d_model,
-            d_book=book_dim,
-            n_message_layers=2,  # TODO: make this an arg
-            n_fused_layers=args.n_layers,
-            activation=args.activation_fn,
-            dropout=args.p_dropout,
-            mode=args.mode,
-            prenorm=args.prenorm,
-            batchnorm=args.batchnorm,
-            bn_momentum=args.bn_momentum,
+    if args.restore is not None:
+        print(f"[*] Restoring weights from {args.restore}...")
+        ckpt = load_checkpoint(
+            state,
+            args.restore,
+            args,
+            step=args.restore_step,
         )
-    else:
-        model_cls = partial(
-            BatchLobPredModel,
-            ssm=ssm_init_fn,
-            d_output=n_classes,
-            d_model=args.d_model,
-            n_layers=args.n_layers,
-            padded=padded,
-            activation=args.activation_fn,
-            dropout=args.p_dropout,
-            mode=args.mode,
-            prenorm=args.prenorm,
-            batchnorm=args.batchnorm,
-            bn_momentum=args.bn_momentum,
-        )
-
-    # initialize training state
-    state = create_train_state(model_cls,
-                               init_rng,
-                               padded,
-                               retrieval,
-                               use_book_data=args.use_book_data,
-                               in_dim=in_dim,
-                               book_dim=book_dim,
-                               book_seq_len=book_seq_len,
-                               bsz=args.bsz,
-                               seq_len=seq_len,
-                               weight_decay=args.weight_decay,
-                               batchnorm=args.batchnorm,
-                               opt_config=args.opt_config,
-                               ssm_lr=ssm_lr,
-                               lr=lr,
-                               dt_global=args.dt_global)
+        state = ckpt['model']
 
     # Training Loop over epochs
     best_loss, best_acc, best_epoch = 100000000, -100000000.0, 0  # This best loss is val_loss
@@ -283,29 +207,6 @@ def train(args):
                 best_test_loss, best_test_acc = test_loss, test_acc
             else:
                 best_test_loss, best_test_acc = best_loss, best_acc
-
-            '''
-            # Do some validation on improvement.
-            if speech:
-                # Evaluate on resolution 2 val and test sets
-                print(f"[*] Running Epoch {epoch + 1} Res 2 Validation...")
-                val2_loss, val2_acc = validate(state,
-                                               model_cls,
-                                               aux_dataloaders['valloader2'],
-                                               int(seq_len // 2),
-                                               in_dim,
-                                               args.batchnorm,
-                                               step_rescale=2.0)
-
-                print(f"[*] Running Epoch {epoch + 1} Res 2 Test...")
-                test2_loss, test2_acc = validate(state, model_cls, aux_dataloaders['testloader2'], int(seq_len // 2), in_dim, args.batchnorm, step_rescale=2.0)
-                print(f"\n=>> Epoch {epoch + 1} Res 2 Metrics ===")
-                print(
-                    f"\tVal2 Loss: {val2_loss:.5f} --Test2 Loss: {test2_loss:.5f} --"
-                    f" Val Accuracy: {val2_acc:.4f}"
-                    f" Test Accuracy: {test2_acc:.4f}"
-                )
-            '''
 
         # For learning rate decay purposes:
         input = lr, ssm_lr, lr_count, val_acc, opt_acc
