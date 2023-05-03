@@ -144,8 +144,10 @@ def init_train_state(
             d_output=n_classes,
             d_model=args.d_model,
             d_book=book_dim,
-            n_message_layers=2,  # TODO: make this an arg
+            n_message_layers=args.n_message_layers,  # 2
             n_fused_layers=args.n_layers,
+            n_book_pre_layers=args.n_book_pre_layers,
+            n_book_post_layers=args.n_book_post_layers,
             activation=args.activation_fn,
             dropout=args.p_dropout,
             mode=args.mode,

@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Iterable, Optional, Tuple, Union
 from lob.encoding import Message_Tokenizer, Vocab
 import pandas as pd
 import jax
@@ -377,6 +377,7 @@ def validate_msg(
 def find_orig_msg(
         msg: jax.Array,
         seq: jax.Array,
+        comp_cols: Optional[Iterable[int]] = None,
     ) -> Optional[int]:
     """ Finds first msg location in given seq.
         NOTE: could also find earlier msg modifications, might not be the original new message
@@ -385,13 +386,14 @@ def find_orig_msg(
         :param seq: sequence of messages to search in
         Returns index of first token of msg in seq and None if msg is not found
     """
-    occ = find_all_msg_occurances(msg, seq)
+    occ = find_all_msg_occurances(msg, seq, comp_cols)
     if len(occ) > 0:
         return int(occ.flatten()[0])
 
 def find_all_msg_occurances(
         msg: jax.Array,
         seq: jax.Array,
+        comp_cols: Optional[Iterable[int]] = None,
     ) -> jax.Array:
     """ Finds ALL msg locations in given seq.
         NOTE: could also find earlier msg modifications,
@@ -401,6 +403,10 @@ def find_all_msg_occurances(
     """
     l = Message_Tokenizer.MSG_LEN
     seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))[:, :l//2]
+    if comp_cols is not None:
+        # filter down to specific columns
+        seq = seq[:, comp_cols]
+        msg = msg[comp_cols]
     return np.argwhere((seq == msg).all(axis=1))
 
 def find_all_msg_occurances_raw(
@@ -418,3 +424,38 @@ def find_all_msg_occurances_raw(
         Returns index of first token of msg in seq and None if msg is not found
     """
     return seq.loc[(seq.drop('order_id', axis=1) == msg).all(axis=1)]
+
+
+def try_find_msg(
+        msg: jax.Array,
+        seq: jax.Array,
+        seq_mask: jax.Array,
+    ) -> Tuple[Optional[int], Optional[int]]:
+    """ 
+        Returns match index or None if no match is found; and number of fields removed in match
+        If multiple matches are found, the first match is returned.
+        seq_mask: filters to messages with correctly matching price level 
+                  CAVE: values of 1 in mask are set to -1 in seq if no perfect match is found
+    """
+    n_removed = 0
+    # perfect match
+    matches = find_all_msg_occurances(msg, seq)
+    if len(matches) > 0:
+        print('found perfect order match')
+        return int(matches.flatten()[0]), n_removed
+    print('no perfect match found')
+
+    seq = seq.at[seq_mask, :].set(-1)
+    # iteratively remove fields used for matching
+    comp_cols = list(range(len(msg)))
+    remove_order = ['time', 'size', 'price']
+    for col in remove_order:
+        n_removed += 1
+        remove_idx = list(range(*get_idx_from_field(col)))
+        comp_cols = [c for c in comp_cols if c not in remove_idx]
+
+        # remove time from matching criteria
+        matches = find_all_msg_occurances(msg, seq, comp_cols)
+        if len(matches) > 0:
+            return int(matches.flatten()[0]), n_removed
+    return None, None

@@ -7,9 +7,9 @@ import orbax.checkpoint
 from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel
 import wandb
 
-from .init_train import init_train_state, load_checkpoint
-from .dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
-from .lobster_dataloader import LOBSTER, LOBSTER_Dataset
+from lob.init_train import init_train_state, load_checkpoint
+from lob.dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
+from lob.lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
 from s5.ssm import init_S5SSM
@@ -24,11 +24,15 @@ def train(args):
     best_test_loss = 100000000
     best_test_acc = -10000.0
 
-    if args.USE_WANDB:
-        # Make wandb config dictionary
-        wandb.init(project=args.wandb_project, job_type='model_training', config=vars(args), entity=args.wandb_entity)
+    # for parameter sweep: get args from wandb server
+    if args is None:
+        args = wandb.config
     else:
-        wandb.init(mode='offline')
+        if args.USE_WANDB:
+            # Make wandb config dictionary
+            run = wandb.init(project=args.wandb_project, job_type='model_training', config=vars(args), entity=args.wandb_entity)
+        else:
+            run = wandb.init(mode='offline')
 
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
@@ -58,6 +62,7 @@ def train(args):
             args.dir_name,
             seed=args.jax_seed,
             mask_fn=mask_fn,
+            msg_seq_len=args.msg_seq_len,
             bsz=args.bsz,
             use_book_data=args.use_book_data,
         )
@@ -73,12 +78,12 @@ def train(args):
         print_shapes=True
     )
 
-    if args.restore is not None:
-        print(f"[*] Restoring weights from {args.restore}...")
+    if args.restore is not None and args.restore != '':
+        print(f"[*] Restoring weights from {args.restore}")
         ckpt = load_checkpoint(
             state,
             args.restore,
-            args,
+            args.__dict__,
             step=args.restore_step,
         )
         state = ckpt['model']
@@ -183,7 +188,7 @@ def train(args):
         }
         orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         checkpoints.save_checkpoint(
-            ckpt_dir='checkpoints',
+            ckpt_dir=f'checkpoints/{run.name}_{run.id}',
             target=ckpt,
             step=epoch,
             overwrite=True,

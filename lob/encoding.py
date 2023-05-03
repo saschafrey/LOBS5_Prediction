@@ -157,6 +157,44 @@ class Message_Tokenizer:
                 num = [num[i:j] for i, j in zip([0] + delim_i, delim_i + [None])]
             return [enc[d] for d in num]
         return col.apply(_encode_field)
+    
+    def encode_msg(
+            self,
+            msg: np.ndarray,
+            vocab: Vocab,
+        ) -> np.ndarray:
+        """ Encodes a message dictionary into a tokenized numpy array.
+            Takes the same format as the simulator message dicts
+            CAVE: this is only ONE HALF of the encoded message
+        """
+        # msg = {
+        #     'timestamp': str(modif_part[0] * 1e-9 + 9.5 * 3600),
+        #     'type': order_type,
+        #     'order_id': order_id, 
+        #     'quantity': removed_quantity,
+        #     'price': p_mod_raw,
+        #     'side': 'ask' if side == 0 else 'bid',  # TODO: should be 'buy' or 'sell'
+        #     'trade_id': 0  # should be trader_id in future
+        # }
+
+        cols = ['time', 'event_type', 'size', 'price', 'direction']
+        out = []
+        for field, x in zip(cols, msg):
+            # print(field, x)
+            #enc_type = Message_Tokenizer.FIELD_ENC_TYPES[col]
+            enc = vocab.ENCODING[field]
+            delim_i = vocab.TOKEN_DELIM_IDX[field]
+
+            if delim_i is not None:
+                # print('delim_i', delim_i)
+                # print(len(enc.keys()))
+                parts = [enc[x[i:j]] for i, j in zip([0] + delim_i, delim_i + [None])]
+            else:
+                parts = [enc[x]]
+            # print(parts)
+            # print()
+            out.extend(parts)
+        return np.array(out)
 
     def decode(self, toks, vocab):
         toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
@@ -175,7 +213,7 @@ class Message_Tokenizer:
         # elif toks.ndim >= 2:
         #     toks = np.array(toks).reshape(toks.shape[0], -1, Message_Tokenizer.MSG_LEN)
         toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
-        out = np.empty_like(toks, dtype='<U3')
+        out = np.empty_like(toks, dtype='<U4')
         for dec_type, dec in vocab.DECODING.items():
             col_msk = np.zeros_like(toks, dtype=bool)
             col_msk[..., self.col_idx_by_encoder[dec_type]] = True
@@ -296,7 +334,7 @@ class Message_Tokenizer:
             representing them as the original message and new columns containing
             the new order details.
             This effectively does the lookup step in past data.
-            TODO: lookup missing original message data from previous days' data 
+            TODO: lookup missing original message data from previous days' data?
         """
 
         m_changes = pd.merge(

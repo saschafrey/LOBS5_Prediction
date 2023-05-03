@@ -42,10 +42,18 @@ if __name__ == "__main__":
 	parser.add_argument("--restore", type=str,
 		     			help="if given restore from given checkpoint dir")
 	parser.add_argument("--restore_step", type=int)
+	parser.add_argument("--msg_seq_len", type=int, default=500,  # 500
+						help="How many past messages to include in each sample")
 
 	# Model Parameters
+	parser.add_argument("--n_message_layers", type=int, default=2,  # 2
+						help="Number of layers after fusing message and book data")
+	parser.add_argument("--n_book_pre_layers", type=int, default=1,  # 1
+						help="Number of layers taking in raw book data (before projecting dimensions)")
+	parser.add_argument("--n_book_post_layers", type=int, default=1,  # 1
+						help="Number of book seq layers after projecting book data dimensions")
 	parser.add_argument("--n_layers", type=int, default=6,  #6
-						help="Number of layers in the network")
+						help="Number of layers after fusing message and book data")
 	parser.add_argument("--d_model", type=int, default=32,  #128, 32, 16
 						help="Number of features, i.e. H, "
 							 "dimension of layer inputs/outputs")

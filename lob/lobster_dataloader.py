@@ -457,8 +457,7 @@ class LOBSTER(SequenceDataset):
     #    2)  # direction
     #d_output = d_input
     l_output = 0
-    n_messages = 500
-    #L = 500
+    #n_messages = 500
 
     _collate_arg_names = ['book_data'] #['book_data'] #['timesteps']
 
@@ -483,6 +482,7 @@ class LOBSTER(SequenceDataset):
 
     @property
     def init_defaults(self):
+        # NOTE: don't add data_dir here, it's added in the base class
         return {
             #"permute": False,
             #"k_val_segments": 5,  # train/val split is done by picking 5 contiguous folds
@@ -494,8 +494,10 @@ class LOBSTER(SequenceDataset):
         }
 
     def setup(self):
-        self.data_dir = default_data_path
+        self.n_messages = self.msg_seq_len
+        #self.data_dir = default_data_path
         message_files = sorted(glob(str(self.data_dir) + '/*message*.npy'))
+        assert len(message_files) > 0, f'no message files found in {self.data_dir}'
         if self.use_book_data:
             # TODO: why does this only work for validation?
             #       can this be variable depending on the dataset?

@@ -108,6 +108,8 @@ class LobBookModel(nn.Module):
     d_book: int
     d_model: int
     #n_layers: int
+    n_pre_layers: int
+    n_post_layers: int
     activation: str = "gelu"
     dropout: float = 0.0
     training: bool = True
@@ -120,7 +122,7 @@ class LobBookModel(nn.Module):
         """
         Initializes ...
         """
-        self.layers = [
+        self.layers = tuple(
             SequenceLayer(
                 # fix ssm init to correct shape (different than other layers)
                 ssm=partial(self.ssm, H=self.d_book),
@@ -132,8 +134,10 @@ class LobBookModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
-            ),
-            nn.Dense(self.d_model),  # project to d_model
+            ) for _ in range(self.n_pre_layers)
+        )
+        self.layers += (nn.Dense(self.d_model), )  # project to d_model
+        self.layers += tuple(
             SequenceLayer(
                 ssm=self.ssm,
                 dropout=self.dropout,
@@ -144,8 +148,9 @@ class LobBookModel(nn.Module):
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,
-            ),
-        ]
+            )
+            for _ in range(self.n_post_layers)
+        )
 
     def __call__(self, x, integration_timesteps):
         """
@@ -167,6 +172,8 @@ class FullLobPredModel(nn.Module):
     d_book: int
     n_message_layers: int
     n_fused_layers: int
+    n_book_pre_layers: int = 1
+    n_book_post_layers: int = 1
     activation: str = "gelu"
     dropout: float = 0.2
     training: bool = True
@@ -198,7 +205,8 @@ class FullLobPredModel(nn.Module):
             ssm=self.ssm,
             d_book=self.d_book,
             d_model=self.d_model,
-            #n_layers=self.n_layers,
+            n_pre_layers=self.n_book_pre_layers,
+            n_post_layers=self.n_book_post_layers,
             activation=self.activation,
             dropout=self.dropout,
             training=self.training,
