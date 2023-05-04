@@ -313,8 +313,11 @@ class Message_Tokenizer:
         """ Takes prices series and best bid, encoding prices relative to best bid.
             Returns scaled price series
         """
+        print('p', p)
+        print('bb', bb)
         # encode prices relative to (previous) best bid
         p = p - bb
+        print('p-bb', p)
         # truncate price at deviation of 1000
         # min tick is 100, hence min 10-level diff is 900
         # <= 1000 covers ~99.54% on bid side, ~99.1% on ask size (GOOG)
