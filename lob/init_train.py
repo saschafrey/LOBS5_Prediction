@@ -137,7 +137,7 @@ def init_train_state(
     
     if args.use_book_data:
         model_cls = partial(
-            # TODO: decide on model architecture
+            # projecting sequence lengths down has appeared better than padding
             BatchFullLobPredModel,
             #BatchPaddedLobPredModel,
             ssm=ssm_init_fn,

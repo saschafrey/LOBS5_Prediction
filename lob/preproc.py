@@ -1,8 +1,10 @@
 from __future__ import annotations
+import argparse
 from typing import Optional
 import numpy as np
 import pandas as pd
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+from glob import glob
 
 from lob.encoding import Vocab, Message_Tokenizer
 
@@ -131,3 +133,34 @@ def process_book(
     # prepend column with best bid changes (in ticks)
     bid_diff = b[2].div(100).diff().fillna(0).astype(int).values
     return np.concatenate([bid_diff[:, None], mybook], axis=1)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default='/nfs/home/peern/LOBS5/data/raw/',
+		     			help="where to load data from")
+    parser.add_argument("--save_dir", type=str, default='/nfs/home/peern/LOBS5/data/',
+		     			help="where to save processed data")
+    parser.add_argument("--filter_above_lvl", type=int,
+                        help="filters down from levels present in the data to specified number of price levels")
+    args = parser.parse_args()
+
+    message_files = sorted(glob(args.data_dir + '*message*.csv'))
+    book_files = sorted(glob(args.data_dir + '*orderbook*.csv'))
+
+    print('found', len(message_files), 'message files')
+    print('found', len(book_files), 'book files')
+    print()
+
+    print('processing messages...')
+    process_message_files(message_files, book_files, args.save_dir, filter_above_lvl=args.filter_above_lvl)
+    print()
+    
+    print('processing books...')
+    process_book_files(
+        message_files,
+        book_files,
+        args.save_dir,
+        filter_above_lvl=2,  # 2 best price levels
+        n_price_series=8  # represented by an 8-tick range
+    )
+    print('DONE')
