@@ -35,6 +35,8 @@ def process_message_files(
             index_col=False,
             header=None
         )
+        assert len(messages) == len(book)
+
         if filter_above_lvl:
             book = book.iloc[:, :filter_above_lvl * 4]
             messages, book = filter_by_lvl(messages, book, filter_above_lvl)
@@ -142,6 +144,8 @@ if __name__ == '__main__':
 		     			help="where to save processed data")
     parser.add_argument("--filter_above_lvl", type=int,
                         help="filters down from levels present in the data to specified number of price levels")
+    parser.add_argument("--n_tick_range", type=int, default=40,
+                        help="how many ticks price series should be calculated")
     args = parser.parse_args()
 
     message_files = sorted(glob(args.data_dir + '*message*.csv'))
@@ -160,7 +164,7 @@ if __name__ == '__main__':
         message_files,
         book_files,
         args.save_dir,
-        filter_above_lvl=2,  # 2 best price levels
-        n_price_series=8  # represented by an 8-tick range
+        filter_above_lvl=args.filter_above_lvl,
+        n_price_series=args.n_tick_range
     )
     print('DONE')

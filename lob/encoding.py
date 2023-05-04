@@ -297,7 +297,6 @@ class Message_Tokenizer:
         # (previous) best bid
         bb = b.iloc[:, 2].shift()
         # no truncation (large thresh.) --> 199 price levels
-        # TODO: uncomment
         m.price = self._preproc_prices(m.price, bb, p_lower_trunc=-9900, p_upper_trunc=9900)
         m = m.dropna()
         m.price = m.price.astype(int).apply(self._numeric_str)
