@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+from pathlib import Path
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -13,7 +14,8 @@ def process_message_files(
         message_files: list[str],
         book_files: list[str],
         save_dir: str,
-        filter_above_lvl: Optional[int] = None
+        filter_above_lvl: Optional[int] = None,
+        skip_existing: bool = False,
     ) -> None:
 
     v = Vocab()
@@ -22,6 +24,10 @@ def process_message_files(
     assert len(message_files) == len(book_files)
     for m_f, b_f in tqdm(zip(message_files, book_files)):
         print(m_f)
+        m_path = save_dir + m_f.rsplit('/', maxsplit=1)[-1][:-4] + '_proc.npy'
+        if skip_existing and Path(m_path).exists():
+            print('skipping', m_path)
+            continue
 
         col_names = ['time', 'event_type', 'order_id', 'size', 'price', 'direction']
         messages = pd.read_csv(
@@ -47,7 +53,6 @@ def process_message_files(
         m_ = tok.encode(m_, v)
 
         # save processed messages
-        m_path = save_dir + m_f.rsplit('/', maxsplit=1)[-1][:-4] + '_proc.npy'
         np.save(m_path, m_)
         print('saved to', m_path)
 
@@ -80,12 +85,17 @@ def process_book_files(
         save_dir: str,
         n_price_series: int,
         filter_above_lvl: Optional[int] = None,
-        allowed_events=[1, 2, 3, 4]
+        allowed_events=[1, 2, 3, 4],
+        skip_existing: bool = False,
     ) -> None:
 
     for m_f, b_f in tqdm(zip(message_files, book_files)):
         print(m_f)
         print(b_f)
+        b_path = save_dir + b_f.rsplit('/', maxsplit=1)[-1][:-4] + '_proc.npy'
+        if skip_existing and Path(b_path).exists():
+            print('skipping', b_path)
+            continue
 
         messages = pd.read_csv(
             m_f,
@@ -107,7 +117,6 @@ def process_book_files(
 
         # convert to n_price_series separate volume time series (each tick is a price level)
         book = process_book(book, price_levels=n_price_series)
-        b_path = save_dir + b_f.rsplit('/', maxsplit=1)[-1][:-4] + '_proc.npy'
         np.save(b_path, book, allow_pickle=True)
 
 def process_book(
@@ -154,6 +163,8 @@ if __name__ == '__main__':
                         help="filters down from levels present in the data to specified number of price levels")
     parser.add_argument("--n_tick_range", type=int, default=500,
                         help="how many ticks price series should be calculated")
+    parser.add_argument("--skip_existing", action='store_true', default=False)
+    parser.add_argument("--book_only", action='store_true', default=False)
     args = parser.parse_args()
 
     message_files = sorted(glob(args.data_dir + '*message*.csv'))
@@ -163,8 +174,17 @@ if __name__ == '__main__':
     print('found', len(book_files), 'book files')
     print()
 
-    print('processing messages...')
-    process_message_files(message_files, book_files, args.save_dir, filter_above_lvl=args.filter_above_lvl)
+    if not args.book_only:
+        print('processing messages...')
+        process_message_files(
+            message_files,
+            book_files,
+            args.save_dir,
+            filter_above_lvl=args.filter_above_lvl,
+            skip_existing=args.skip_existing,
+        )
+    else:
+        print('Skipping message processing...')
     print()
     
     print('processing books...')
@@ -173,6 +193,7 @@ if __name__ == '__main__':
         book_files,
         args.save_dir,
         filter_above_lvl=args.filter_above_lvl,
-        n_price_series=args.n_tick_range
+        n_price_series=args.n_tick_range,
+        skip_existing=args.skip_existing,
     )
     print('DONE')
