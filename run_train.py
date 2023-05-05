@@ -5,6 +5,7 @@ from lob.dataloading import Datasets
 #import tensorflow as tf
 import os
 import torch
+import cProfile
 
 
 if __name__ == "__main__":
@@ -131,3 +132,4 @@ if __name__ == "__main__":
 						help="seed randomness")
 
 	train(parser.parse_args())
+	#cProfile.run('train(parser.parse_args())')

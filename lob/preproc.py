@@ -78,8 +78,8 @@ def process_book_files(
         message_files: list[str],
         book_files: list[str],
         save_dir: str,
-        filter_above_lvl: int,
         n_price_series: int,
+        filter_above_lvl: Optional[int] = None,
         allowed_events=[1, 2, 3, 4]
     ) -> None:
 
@@ -102,7 +102,8 @@ def process_book_files(
         messages = messages.loc[messages.event_type.isin(allowed_events)]
         book = book.loc[messages.index]
 
-        messages, book = filter_by_lvl(messages, book, filter_above_lvl)
+        if filter_above_lvl is not None:
+            messages, book = filter_by_lvl(messages, book, filter_above_lvl)
 
         # convert to n_price_series separate volume time series (each tick is a price level)
         book = process_book(book, price_levels=n_price_series)
@@ -113,14 +114,20 @@ def process_book(
         b: pd.DataFrame,
         price_levels: int
     ) -> np.ndarray:
-    b_indices = b.iloc[:, ::2].sub(b[2], axis=0).div(100).astype(int)
-    b_indices = b_indices + price_levels // 2 - 2  # -2 to account for average spread
+
+    # mid-price rounded to nearest tick (100)
+    #p_ref = b[2]
+    p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2).round(-2).astype(int)
+    b_indices = b.iloc[:, ::2].sub(p_ref, axis=0).div(100).astype(int)
+    b_indices = b_indices + price_levels // 2
     b_indices.columns = list(range(b_indices.shape[1]))
-    vol_book = b.iloc[:, 1::2]
+    vol_book = b.iloc[:, 1::2].copy()
+    # convert sell volumes (ask side) to negative
+    vol_book.iloc[:, ::2] = vol_book.iloc[:, ::2].mul(-1)
     vol_book.columns = list(range(vol_book.shape[1]))
 
-    # convert to book representation with volume at each price level relative to best bid
-    # i.e. at each time we have a fixed width snapshot around the best bid
+    # convert to book representation with volume at each price level relative to reference price (mid)
+    # i.e. at each time we have a fixed width snapshot around the mid price
     # therefore movement of the mid price needs to be a separate feature (e.g. relative to previous price)
 
     mybook = np.zeros((len(b), price_levels), dtype=np.int32)
@@ -133,8 +140,9 @@ def process_book(
                 mybook[i, price] = vol_book.values[i, j]
 
     # prepend column with best bid changes (in ticks)
-    bid_diff = b[2].div(100).diff().fillna(0).astype(int).values
-    return np.concatenate([bid_diff[:, None], mybook], axis=1)
+    #bid_diff = b[2].div(100).diff().fillna(0).astype(int).values
+    mid_diff = p_ref.div(100).diff().fillna(0).astype(int).values
+    return np.concatenate([mid_diff[:, None], mybook], axis=1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -144,7 +152,7 @@ if __name__ == '__main__':
 		     			help="where to save processed data")
     parser.add_argument("--filter_above_lvl", type=int,
                         help="filters down from levels present in the data to specified number of price levels")
-    parser.add_argument("--n_tick_range", type=int, default=40,
+    parser.add_argument("--n_tick_range", type=int, default=500,
                         help="how many ticks price series should be calculated")
     args = parser.parse_args()
 

@@ -19,7 +19,7 @@ class Vocab:
         self._add_field('time', [str(i).zfill(3) for i in range(1000)], [3,6,9,12])
         self._add_field('event_type', ['1', '2', '3', '4'], None)
         self._add_field('size', [str(i).zfill(4) for i in range(10000)], [])
-        self._add_field('price', [str(i).zfill(2) for i in range(100)] + ['+', '-'], [1])
+        self._add_field('price', [str(i).zfill(2) for i in range(1000)] + ['+', '-'], [1])
         self._add_field('direction', ['0', '1'], None)
         #self._add_field('generic', [str(i) for i in range(10)] + ['+', '-'])
         
@@ -295,9 +295,12 @@ class Message_Tokenizer:
 
         # PRICE
         # (previous) best bid
-        bb = b.iloc[:, 2].shift()
-        # no truncation (large thresh.) --> 199 price levels
-        m.price = self._preproc_prices(m.price, bb, p_lower_trunc=-9900, p_upper_trunc=9900)
+        #bb = b.iloc[:, 2].shift()
+        # rounded mid-price reference
+        p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2).round(-2).astype(int).shift()
+        # --> 199 price levels
+        # --> 1999 price levels
+        m.price = self._preproc_prices(m.price, p_ref, p_lower_trunc=-99900, p_upper_trunc=99900)
         m = m.dropna()
         m.price = m.price.astype(int).apply(self._numeric_str)
 
@@ -309,16 +312,13 @@ class Message_Tokenizer:
 
         return m
 
-    def _preproc_prices(self, p, bb, p_lower_trunc=-1000, p_upper_trunc=1300):
+    def _preproc_prices(self, p, p_ref, p_lower_trunc=-1000, p_upper_trunc=1300):
         """ Takes prices series and best bid, encoding prices relative to best bid.
             Returns scaled price series
         """
-        print('p', p)
-        print('bb', bb)
-        # encode prices relative to (previous) best bid
-        p = p - bb
-        print('p-bb', p)
-        # truncate price at deviation of 1000
+        # encode prices relative to (previous) refernce price
+        p = p - p_ref
+        # truncate price at deviation of x
         # min tick is 100, hence min 10-level diff is 900
         # <= 1000 covers ~99.54% on bid side, ~99.1% on ask size (GOOG)
         pct_changed = 100 * len(p.loc[p > p_upper_trunc]) / len(p)

@@ -152,7 +152,7 @@ class LOBSTER_Dataset(Dataset):
             n_messages,
             mask_fn,
             seed=None,
-            n_buffer_files=0,
+            n_cache_files=0,
             randomize_offset=True,
             *,
             book_files=None,
@@ -171,7 +171,7 @@ class LOBSTER_Dataset(Dataset):
         self.num_days = len(self.message_files)
         self.n_messages = n_messages
 
-        self.n_cache_files = n_buffer_files
+        self.n_cache_files = n_cache_files
         self._message_cache = OrderedDict()
         self.vocab = Vocab()
         self.seq_len = self.n_messages * Message_Tokenizer.MSG_LEN
@@ -534,12 +534,14 @@ class LOBSTER(SequenceDataset):
             self.train_files, self.train_book_files = zip(*self.train_files)
             self.val_files, self.val_book_files = zip(*self.val_files)
 
+        # TODO: make n_cache_files a parameter
+        n_cache_files = 0
         self.dataset_train = LOBSTER_Dataset(
             self.train_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=50,
+            n_cache_files=n_cache_files,
             randomize_offset=True,
             book_files=self.train_book_files,
         )
@@ -558,7 +560,7 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=50,
+            n_cache_files=n_cache_files,
             randomize_offset=True,
             book_files=self.val_book_files,
         )
@@ -568,7 +570,7 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=50,
+            n_cache_files=n_cache_files,
             randomize_offset=False,
             book_files=self.test_book_files,
         )
@@ -583,6 +585,7 @@ class LOBSTER(SequenceDataset):
             keeps the same validation set and removes validation
             indices from training set
         """
+        n_cache_files = 0
         # use a new seed for the train dataset to
         # get a different random offset for each sequence for each epoch
         self.dataset_train = LOBSTER_Dataset(
@@ -590,7 +593,7 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_buffer_files=50,
+            n_cache_files=n_cache_files,
             randomize_offset=True,
             book_files=self.train_book_files,
         )
