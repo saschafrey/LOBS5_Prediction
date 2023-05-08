@@ -313,7 +313,8 @@ class Message_Tokenizer:
         return m
 
     def _preproc_prices(self, p, p_ref, p_lower_trunc=-1000, p_upper_trunc=1300):
-        """ Takes prices series and best bid, encoding prices relative to best bid.
+        """ Takes prices series and reference price (best bid or mid price), 
+            encoding prices relative to reference price.
             Returns scaled price series
         """
         # encode prices relative to (previous) refernce price
@@ -334,7 +335,7 @@ class Message_Tokenizer:
     def _add_orig_msg_features(self, m):
         """ Changes representation of order cancellation (2) / deletion (3),
             representing them as the original message and new columns containing
-            the new order details.
+            the order modification details.
             This effectively does the lookup step in past data.
             TODO: lookup missing original message data from previous days' data?
         """
