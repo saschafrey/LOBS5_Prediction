@@ -164,8 +164,11 @@ if __name__ == '__main__':
     parser.add_argument("--n_tick_range", type=int, default=500,
                         help="how many ticks price series should be calculated")
     parser.add_argument("--skip_existing", action='store_true', default=False)
+    parser.add_argument("--messages_only", action='store_true', default=False)
     parser.add_argument("--book_only", action='store_true', default=False)
     args = parser.parse_args()
+
+    assert not (args.messages_only and args.book_only)
 
     message_files = sorted(glob(args.data_dir + '*message*.csv'))
     book_files = sorted(glob(args.data_dir + '*orderbook*.csv'))
@@ -187,13 +190,16 @@ if __name__ == '__main__':
         print('Skipping message processing...')
     print()
     
-    print('processing books...')
-    process_book_files(
-        message_files,
-        book_files,
-        args.save_dir,
-        filter_above_lvl=args.filter_above_lvl,
-        n_price_series=args.n_tick_range,
-        skip_existing=args.skip_existing,
-    )
+    if not args.messages_only:
+        print('processing books...')
+        process_book_files(
+            message_files,
+            book_files,
+            args.save_dir,
+            filter_above_lvl=args.filter_above_lvl,
+            n_price_series=args.n_tick_range,
+            skip_existing=args.skip_existing,
+        )
+    else:
+        print('Skipping book processing...')
     print('DONE')
