@@ -342,7 +342,7 @@ class Message_Tokenizer:
 
         m_changes = pd.merge(
             m.loc[m.event_type == 1],
-            m.loc[(m.event_type == 2) | (m.event_type == 3)].reset_index(),
+            m.loc[(m.event_type == 2) | (m.event_type == 3) | (m.event_type == 4)].reset_index(),
             how='right', on='order_id', suffixes=['', '_new']).set_index('index')
         #display(m_changes)
 

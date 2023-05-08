@@ -59,9 +59,9 @@ def syntax_validation_matrix(v = None):
     # only new messages and executions allowed in original message
     # and only cancels or deletions in modified message
     i, _ = get_idx_from_field("event_type")
-    mask = update_allowed_tok_slice(mask, i, ['1', '4'])
+    mask = update_allowed_tok_slice(mask, i, ['1'])
     i, _ = get_idx_from_field("event_type_new")
-    mask = update_allowed_tok_slice(mask, i, ['2', '3'])
+    mask = update_allowed_tok_slice(mask, i, ['2', '3', '4'])
 
     # adjustments for special tokens (no MSK or HID) allowed
     # NA always allowed
@@ -357,20 +357,12 @@ def validate_msg(
     if err:
         print("time after opening hours")
 
-    if event_type_new in {2, 3} and not np.isnan(direction):
+    if event_type_new in {2, 3, 4} and not np.isnan(direction):
         direction_new = msg_dec[fields['direction_new']]
         err = direction != direction_new
         err_count += err
         if err:
             print("direction cannot be modified")
-        
-    # execution on bid side must be at price lvl 0
-    # note: execution of BUY order is on bid side
-    if event_type == 4 and direction == 1:
-        err = price != 0
-        err_count += err
-        if err:
-            print("execution on bid side must be at price lvl 0")
     
     return bool(err_count == 0)
 
