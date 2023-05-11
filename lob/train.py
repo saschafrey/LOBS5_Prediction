@@ -124,7 +124,8 @@ def train(args):
                                               seq_len,
                                               in_dim,
                                               args.batchnorm,
-                                              lr_params)
+                                              lr_params,
+                                              n_devices=args.n_devices)
         # reinit training loader, so that sequences are initialised with
         # different offsets
         trainloader = create_lobster_train_loader(

@@ -388,7 +388,41 @@ def prep_batch(batch: tuple,
     return full_inputs, np.squeeze(targets.astype(float)), integration_timesteps
 
 
-def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_params):
+def device_reshape(
+        inputs: Tuple,
+        targets: np.ndarray,
+        integration_timesteps: Tuple,
+        n_devices: int
+    ) -> Tuple:
+    """
+    Reshape inputs, targets, and integration timesteps for multi-device training.
+    :param inputs:                  (tuple) inputs as returned from prep_batch.
+    :param targets:                 (np.ndarray) targets as returned from prep_batch.
+    :param integration_timesteps:   (tuple) integration timesteps as returned from prep_batch.
+    :param n_devices:               (int) number of devices.
+    :return:
+    """
+    inputs = tuple([np.reshape(x, (n_devices, -1, *x.shape[1:])) for x in inputs])
+    targets = np.reshape(targets, (n_devices, -1, *targets.shape[1:]))
+    integration_timesteps = tuple(
+        [np.reshape(x, (n_devices, -1, *x.shape[1:])) for x in integration_timesteps]
+    )
+
+    return inputs, targets, integration_timesteps
+
+
+
+def train_epoch(
+        state,
+        rng,
+        model,
+        trainloader,
+        seq_len,
+        in_dim,
+        batchnorm,
+        lr_params,
+        n_devices=1,
+    ):
     """
     Training function for an epoch that loops over batches.
     """
@@ -400,6 +434,11 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
 
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim)
+
+        if n_devices > 1:
+            inputs, labels, integration_times = device_reshape(
+                inputs, labels, integration_times, n_devices)
+
         #print(inputs.shape)
         #print(labels.shape)
         #print(integration_times.shape)

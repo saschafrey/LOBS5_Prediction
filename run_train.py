@@ -95,6 +95,8 @@ if __name__ == "__main__":
 						help="batchnorm momentum")
 	parser.add_argument("--bsz", type=int, default=16, #64, (max 16 with full size)
 						help="batch size")
+	parser.add_argument("--n_devices", type=int, default=1,
+		     			help="number of devices (GPUs) to use")
 	parser.add_argument("--epochs", type=int, default=100,  #100, 20
 						help="max number of epochs")
 	parser.add_argument("--early_stop_patience", type=int, default=1000,
