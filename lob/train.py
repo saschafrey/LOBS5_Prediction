@@ -116,6 +116,7 @@ def train(args):
         #  Passing this around to manually handle per step learning rate decay.
         lr_params = (decay_function, ssm_lr, lr, step, end_step, args.opt_config, args.lr_min)
 
+        print('Training on', args.num_devices, 'devices.')
         train_rng, skey = random.split(train_rng)
         state, train_loss, step = train_epoch(state,
                                               skey,
@@ -125,7 +126,7 @@ def train(args):
                                               in_dim,
                                               args.batchnorm,
                                               lr_params,
-                                              n_devices=args.n_devices)
+                                              num_devices=args.num_devices)
         # reinit training loader, so that sequences are initialised with
         # different offsets
         trainloader = create_lobster_train_loader(

@@ -421,7 +421,7 @@ def train_epoch(
         in_dim,
         batchnorm,
         lr_params,
-        n_devices=1,
+        num_devices=1,
     ):
     """
     Training function for an epoch that loops over batches.
@@ -435,9 +435,9 @@ def train_epoch(
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim)
 
-        if n_devices > 1:
+        if num_devices > 1:
             inputs, labels, integration_times = device_reshape(
-                inputs, labels, integration_times, n_devices)
+                inputs, labels, integration_times, num_devices)
 
         #print(inputs.shape)
         #print(labels.shape)
