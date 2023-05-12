@@ -277,10 +277,10 @@ BatchFullLobPredModel = nn.vmap(
     variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
     split_rngs={"params": False, "dropout": True}, axis_name='batch')
 
-class ParFullLobPredModel(BatchFullLobPredModel):
-    @partial(jax.pmap, static_broadcasted_argnums=(0,))
-    def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
-        return super().__call__(x_m, x_b, message_integration_timesteps, book_integration_timesteps)
+# class ParFullLobPredModel(BatchFullLobPredModel):
+#     @partial(jax.pmap, static_broadcasted_argnums=(0,))
+#     def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
+#         return super().__call__(x_m, x_b, message_integration_timesteps, book_integration_timesteps)
 
 ## Repeat shorter sequences, instead of linear projection:
 

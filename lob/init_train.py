@@ -12,7 +12,7 @@ from flax.training import checkpoints
 from flax import linen as nn
 from orbax import checkpoint
 from lob.encoding import Vocab
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel, FullLobPredModel, ParFullLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel, FullLobPredModel#, ParFullLobPredModel
 
 #from lob.lob_seq_model import BatchLobPredModel
 from lob.train_helpers import create_train_state, eval_step, prep_batch, cross_entropy_loss, compute_accuracy
@@ -136,16 +136,16 @@ def init_train_state(
     )
     
     if args.use_book_data:
-        if args.num_devices > 1:
-            model_cls = ParFullLobPredModel
-        else:
-            model_cls = BatchFullLobPredModel
+        # if args.num_devices > 1:
+        #     model_cls = ParFullLobPredModel
+        # else:
+        #     model_cls = BatchFullLobPredModel
         
         model_cls = partial(
             # projecting sequence lengths down has appeared better than padding
-            #BatchFullLobPredModel,
+            BatchFullLobPredModel,
             #BatchPaddedLobPredModel,
-            model_cls,
+            #model_cls,
             ssm=ssm_init_fn,
             d_output=n_classes,
             d_model=args.d_model,
@@ -197,7 +197,8 @@ def init_train_state(
         opt_config=args.opt_config,
         ssm_lr=ssm_lr,
         lr=lr,
-        dt_global=args.dt_global
+        dt_global=args.dt_global,
+        num_devices=args.num_devices,
     )
 
     return state, model_cls
