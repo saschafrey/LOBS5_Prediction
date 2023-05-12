@@ -302,53 +302,9 @@ def cross_entropy_loss(logits, label):
     #return -np.sum(label * logits)
 
 
-'''
-def mse_loss(preds, targets):
-    return np.sum((preds - targets)**2)
-
-
-def rmse_loss(preds, targets):
-    return np.sqrt(mse_loss(preds, targets))
-
-
-def weighted_loss(
-    outputs,
-    targets,
-    loss_fns=[cross_entropy_loss, cross_entropy_loss, mse_loss],
-    weights=[0.25, 0.25, 0.5],
-    dims=[2, 7, 6]
-):
-
-    assert np.sum(dims) == outputs.shape[1]
-    assert np.sum(weights) == 1.
-
-    slices = get_slices(dims)
-    return np.sum(
-        [w * loss_fn(outputs[s], targets[s]) for w, loss_fn, s in zip(weights, loss_fns, slices)])
-'''
-
 @partial(np.vectorize, signature="(c),()->()")
 def compute_accuracy(logits, label):
     return np.argmax(logits) == label
-
-#@jax.jit
-#def compute_accuracy(logits, dummy_labels):
-#    bool_idx = np.arange(logits.shape[0]), np.argmax(logits, axis=1)
-#    return dummy_labels[bool_idx] == 1
-
-'''
-def weighted_accuracy_and_rmse(
-    outputs,
-    targets,
-    acc_weights=[0.5, 0.5],
-    dims=[2, 7, 6]
-):
-    slices = get_slices(dims)
-    acc = np.sum(
-        [w * compute_accuracy(outputs[s], targets[s]) for w, s in zip(acc_weights, slices[:-1])])
-    rmse = rmse_loss(outputs[slices[-1]], targets[slices[-1]])
-    return acc, rmse
-'''
 
 def prep_batch(batch: tuple,
                seq_len: int,
@@ -440,16 +396,9 @@ def train_epoch(
 
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim)
-
-        #if num_devices > 1:
+        # add device dimension and split batch between devices
         inputs, labels, integration_times = device_reshape(
             inputs, labels, integration_times, num_devices)
-
-        #print(inputs.shape)
-        #print(labels.shape)
-        #print(integration_times.shape)
-        #import sys
-        #sys.exit()
 
         rng, drop_rng = jax.random.split(rng)
         state, loss = train_step(
@@ -486,8 +435,8 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
     return aveloss, aveaccu
 
-
-@partial(jax.jit, static_argnums=(5, 6, 7))
+# NOTE: jitting pmapped function may cause inefficient data movement between devices
+#@partial(jax.jit, static_argnums=(5, 6, 7))
 def train_step(
         state,
         rng,
@@ -502,56 +451,8 @@ def train_step(
         NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
               or only (batched_message_inputs,) if book inputs are not used.
     """
-    # def loss_fn(params):
 
-    #     if batchnorm:
-    #         logits, mod_vars = state.apply_fn( #model.apply(
-    #             {"params": params, "batch_stats": state.batch_stats},
-    #             *batch_inputs, *batch_integration_timesteps,
-    #             rngs={"dropout": rng},
-    #             mutable=["intermediates", "batch_stats"],
-    #         )
-    #     else:
-    #         logits, mod_vars = state.apply_fn( # model.apply(
-    #             {"params": params},
-    #             *batch_inputs, *batch_integration_timesteps,
-    #             rngs={"dropout": rng},
-    #             mutable=["intermediates"],
-    #         )
-
-    #     # average cross-ent loss
-    #     loss = np.mean(cross_entropy_loss(logits, batch_labels))
-        
-    #     # not necessary if labels are already one-hot:
-    #     '''
-    #     cum_dims = np.cumsum(model.output_dims)
-    #     loss = np.sum(
-    #         np.mean(cross_entropy_loss(log, lab))
-    #         for log, lab in zip(
-    #             np.split(logits, cum_dims[:-1], axis=1),
-    #             np.split(batch_labels, cum_dims[:-1], axis=1)
-    #         )
-    #     )
-    #     '''
-
-    #     return loss, (mod_vars, logits)
-
-    # (loss, (mod_vars, logits)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-    
-    # if num_devices > 1:
-    #     fpass = jax.pmap(
-    #         forward_pass,
-    #         axis_name="batch_devices",
-    #         static_broadcasted_argnums=(1, 7),
-    #         in_axes=(None, None, None, None, 0, 0, 0, None))
-    # else:
-    # fpass = forward_pass
-
-    # print('len(batch_inputs)', len(batch_inputs))
-    # print('batch_inputs[0].shape', batch_inputs[0].shape)
-    # print('batch_inputs[1].shape', batch_inputs[1].shape)
-
-    loss, mod_vars, grads = forward_pass(
+    loss, mod_vars, grads = par_loss_and_grad(
         state.params,
         state.apply_fn,
         state.batch_stats,
@@ -566,11 +467,6 @@ def train_step(
     mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
     grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
 
-    # print('loss.shape', loss.shape)
-    # print('grad shapes:')
-    # jax.tree_map(lambda x: print(x.shape), grads)
-    # print()
-
     if batchnorm:
         state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
     else:
@@ -582,7 +478,7 @@ def train_step(
     axis_name="batch_devices",
     static_broadcasted_argnums=(1, 7),
     in_axes=(None, None, None, None, 0, 0, 0, None))
-def forward_pass(
+def par_loss_and_grad(
         params,  # 0
         apply_fn,  # 1
         batch_stats,  # 2
