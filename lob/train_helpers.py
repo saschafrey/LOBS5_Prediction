@@ -411,7 +411,6 @@ def train_epoch(
             batchnorm,
             num_devices,
         )
-        print('finished train step')
         batch_losses.append(loss)
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
         state, step = update_learning_rate_per_step(lr_params, state)
@@ -436,7 +435,7 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     return aveloss, aveaccu
 
 # NOTE: jitting pmapped function may cause inefficient data movement between devices
-#@partial(jax.jit, static_argnums=(5, 6, 7))
+@partial(jax.jit, static_argnums=(5, 6, 7))
 def train_step(
         state,
         rng,

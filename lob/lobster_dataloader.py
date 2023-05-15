@@ -22,14 +22,6 @@ default_data_path = default_data_path / "data"
 
 
 class LOBSTER_Dataset(Dataset):
-    """ TODO: investigate speed of __getitem__ in practice: currently loads every sequence
-              from pre-processed file, one-hot encodes and moves to GPU
-        TODO: time encoding?
-    """
-
-    #EVENT_TYPES = 2
-    #ORDER_SIZES = 64
-    #PRICES = 23
 
     @staticmethod
     def get_masking_fn(*, random_msg_idxs=None, random_fields=None, randomize_message=True):
@@ -156,6 +148,7 @@ class LOBSTER_Dataset(Dataset):
             randomize_offset=True,
             *,
             book_files=None,
+            use_simple_book=False,
             ) -> None:
 
         assert len(message_files) > 0
@@ -167,6 +160,7 @@ class LOBSTER_Dataset(Dataset):
             self._book_cache = OrderedDict()
         else:
             self.use_book_data = False
+        self.use_simple_book = use_simple_book
 
         self.num_days = len(self.message_files)
         self.n_messages = n_messages
@@ -252,6 +246,17 @@ class LOBSTER_Dataset(Dataset):
             # first message is already dropped, so we can use
             # the book state with the same index (prior to the message)
             book = book[seq_start: seq_end]#.reshape(-1)
+
+            # use raw price, volume series, rather than volume image
+            # subtract initial price to start all sequences around 0
+            if self.use_simple_book:
+                # normalize slighly (batch norm should do this better)
+                book = book.copy().astype(np.float32) / 1000
+                p_mid_0 = (book[0, 0] + book[0, 2]) / 2
+                book[:, ::2] = (book[:, ::2] - p_mid_0)
+                # divide volume by 100
+                #book[:, 1::2] = book[:, 1::2] / 100
+
             ret_tuple = X, y, book
         else:
             ret_tuple = X, y
@@ -491,6 +496,7 @@ class LOBSTER(SequenceDataset):
             "seed": 42,  # For train/val split
             "mask_fn": LOBSTER_Dataset.random_mask,
             "use_book_data": False,
+            "use_simple_book" : False,
         }
 
     def setup(self):
@@ -544,6 +550,7 @@ class LOBSTER(SequenceDataset):
             n_cache_files=n_cache_files,
             randomize_offset=True,
             book_files=self.train_book_files,
+            use_simple_book=self.use_simple_book,
         )
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = len(self.dataset_train.vocab)
@@ -563,6 +570,7 @@ class LOBSTER(SequenceDataset):
             n_cache_files=n_cache_files,
             randomize_offset=True,
             book_files=self.val_book_files,
+            use_simple_book=self.use_simple_book,
         )
 
         self.dataset_test = LOBSTER_Dataset(
@@ -573,6 +581,7 @@ class LOBSTER(SequenceDataset):
             n_cache_files=n_cache_files,
             randomize_offset=False,
             book_files=self.test_book_files,
+            use_simple_book=self.use_simple_book,
         )
 
         # TODO: remove

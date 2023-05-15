@@ -87,6 +87,7 @@ def process_book_files(
         filter_above_lvl: Optional[int] = None,
         allowed_events=[1, 2, 3, 4],
         skip_existing: bool = False,
+        use_raw_book_repr=False,
     ) -> None:
 
     for m_f, b_f in tqdm(zip(message_files, book_files)):
@@ -116,7 +117,11 @@ def process_book_files(
             messages, book = filter_by_lvl(messages, book, filter_above_lvl)
 
         # convert to n_price_series separate volume time series (each tick is a price level)
-        book = process_book(book, price_levels=n_price_series)
+        if not use_raw_book_repr:
+            book = process_book(book, price_levels=n_price_series)
+        else:
+            book = book.values
+
         np.save(b_path, book, allow_pickle=True)
 
 def process_book(
@@ -166,6 +171,7 @@ if __name__ == '__main__':
     parser.add_argument("--skip_existing", action='store_true', default=False)
     parser.add_argument("--messages_only", action='store_true', default=False)
     parser.add_argument("--book_only", action='store_true', default=False)
+    parser.add_argument("--use_raw_book_repr", action='store_true', default=False)
     args = parser.parse_args()
 
     assert not (args.messages_only and args.book_only)
@@ -199,6 +205,7 @@ if __name__ == '__main__':
             filter_above_lvl=args.filter_above_lvl,
             n_price_series=args.n_tick_range,
             skip_existing=args.skip_existing,
+            use_raw_book_repr=args.use_raw_book_repr,
         )
     else:
         print('Skipping book processing...')
