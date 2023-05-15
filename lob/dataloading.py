@@ -50,7 +50,7 @@ def create_lobster_prediction_dataset(
 
 	# TODO: make arg
 	# TODO: same number of workers for val and test? (currently 0)
-	num_workers = 4
+	num_workers = 8
 	# use sampler to only get individual samples and automatic batching from dataloader
 	#trn_sampler = LOBSTER_Sampler(
 	#		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)

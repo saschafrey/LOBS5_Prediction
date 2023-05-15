@@ -59,16 +59,39 @@ class LOBSTER_Dataset(Dataset):
             
         return masking_fn
 
-    # TODO: random seed for mask positioning?
     @staticmethod
     def random_mask(seq, rng):
         """ Select random token in given seq and set to MSK token
             as prediction target
         """
+        # mask a random token somewhere in the sequence
+        # seq = seq.copy()
+        # i = rng.integers(0, len(seq.flat) - 1)
+        # y = seq.flat[i]
+        # seq.flat[i] = Vocab.MASK_TOK
+        # return seq, y
+    
+        # mask a random token in the most recent message
+        # and HIDe a random uniform number of other tokens randomly
         seq = seq.copy()
-        i = rng.integers(0, len(seq.flat) - 1)
-        y = seq.flat[i]
-        seq.flat[i] = Vocab.MASK_TOK
+
+        # select random positions to HIDe
+        l = Message_Tokenizer.MSG_LEN
+        # sample uniformly without replacement
+        hid_pos = sorted(
+            rng.choice(
+                list(range(l)),
+                rng.integers(1, l + 1),
+                replace=False
+            )
+        )
+        # select one position to MSK
+        msk_pos = rng.choice(hid_pos)
+        hid_pos = list(set(hid_pos) - {msk_pos})
+
+        y = seq[-1, msk_pos]
+        seq[-1, msk_pos] = Vocab.MASK_TOK
+        seq[-1, hid_pos] = Vocab.HIDDEN_TOK
         return seq, y
 
     @staticmethod
