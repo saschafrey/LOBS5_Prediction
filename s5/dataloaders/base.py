@@ -75,7 +75,8 @@ class DefaultCollateMixin:
             #return torch.tensor(batch)
             #return torch.tensor(np.array(batch))
             #return sparse.BCOO.fromdense(jnp.array(batch))
-            return jnp.array(batch)
+            # return jnp.array(batch)
+            return np.array(batch)
 
     @classmethod
     def _collate_fn(cls, batch, *args, **kwargs):

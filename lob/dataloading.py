@@ -24,6 +24,7 @@ def create_lobster_prediction_dataset(
 		msg_seq_len: int = 500,
 		bsz: int=128,
 		use_book_data: bool = False,
+		n_data_workers: int = 0
 	) -> ReturnType:
 	""" 
 	"""
@@ -48,20 +49,20 @@ def create_lobster_prediction_dataset(
 
 	print("Using mask function:", mask_fn)
 
-	# TODO: make arg
-	# TODO: same number of workers for val and test? (currently 0)
-	num_workers = 8
 	# use sampler to only get individual samples and automatic batching from dataloader
 	#trn_sampler = LOBSTER_Sampler(
 	#		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	
 	# trn_loader = make_data_loader(
 	# 	dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
-	trn_loader = create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train_offsets=False)
+	trn_loader = create_lobster_train_loader(
+		dataset_obj, seed, bsz, n_data_workers, reset_train_offsets=False)
 	val_loader = make_data_loader(
-		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False, num_workers=0)
+		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz,
+		drop_last=False, shuffle=False, num_workers=n_data_workers)
 	tst_loader = make_data_loader(
-		dataset_obj.dataset_test, dataset_obj, seed=seed, batch_size=bsz, drop_last=False, shuffle=False, num_workers=0)
+		dataset_obj.dataset_test, dataset_obj, seed=seed, batch_size=bsz,
+		drop_last=False, shuffle=False, num_workers=n_data_workers)
 
 	N_CLASSES = dataset_obj.d_output
 	SEQ_LENGTH = dataset_obj.L
@@ -79,14 +80,14 @@ def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train
 	if reset_train_offsets:
 		dataset_obj.reset_train_offsets()
 	# use sampler to only get individual samples and automatic batching from dataloader
-	trn_sampler = LOBSTER_Sampler(
-		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
+	#trn_sampler = LOBSTER_Sampler(
+	#	dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	trn_loader = make_data_loader(
 		dataset_obj.dataset_train,
 		dataset_obj,
 		seed=seed,
 		batch_size=bsz,
-		sampler=trn_sampler,
+		#sampler=trn_sampler,
 		num_workers=num_workers)
 	return trn_loader
 

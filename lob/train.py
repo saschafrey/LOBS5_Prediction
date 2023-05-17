@@ -65,6 +65,7 @@ def train(args):
             msg_seq_len=args.msg_seq_len,
             bsz=args.bsz,
             use_book_data=args.use_book_data,
+            n_data_workers=args.n_data_workers,
         )
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
@@ -133,7 +134,7 @@ def train(args):
             lobster_dataset,
             int(random.randint(skey, (1,), 0, 100000)),
             args.bsz,
-            num_workers=16,
+            num_workers=args.n_data_workers,
             reset_train_offsets=True)
 
         if valloader is not None:

@@ -6,7 +6,7 @@ from jax.nn import one_hot
 from tqdm import tqdm
 from flax.training import train_state
 import optax
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from lob.lob_seq_model import LobPredModel
 
@@ -326,22 +326,18 @@ def prep_batch(batch: tuple,
 
     assert inputs.shape[1] == seq_len
 
-    # Inputs is either [n_batch, seq_len] or [n_batch, seq_len, in_dim].
-    # If there are not three dimensions and trailing dimension is not equal to in_dim then
-    # transform into one-hot.  This should be a fairly reliable fix.
-    if (inputs.ndim < 3) and (inputs.shape[-1] != in_dim):
-        inputs = one_hot(np.asarray(inputs), in_dim)
+    inputs = one_hot(np.asarray(inputs), in_dim)
 
     # If there is an aux channel containing the integration times, then add that.
     if 'timesteps_msg' in aux_data:
-        integration_timesteps = (np.diff(aux_data['timesteps_msg']), )
+        integration_timesteps = (np.diff(np.asarray(aux_data['timesteps_msg'])), )
     else:
         integration_timesteps = (np.ones((len(inputs), seq_len)), )
 
     if "book_data" in aux_data:
-        full_inputs = (inputs.astype(float), aux_data['book_data'])
+        full_inputs = (inputs.astype(float), np.asarray(aux_data['book_data']))
         if "timesteps_book" in aux_data:
-            integration_timesteps += (np.diff(aux_data['timesteps_book']), )
+            integration_timesteps += (np.diff(np.asarray(aux_data['timesteps_book'])), )
         else:
             integration_timesteps += (np.ones((len(inputs), seq_len)), )
     else:
@@ -452,9 +448,10 @@ def train_step(
     """
 
     loss, mod_vars, grads = par_loss_and_grad(
-        state.params,
-        state.apply_fn,
-        state.batch_stats,
+        # state.params,
+        # state.apply_fn,
+        # state.batch_stats,
+        state,
         rng,
         batch_inputs,
         batch_labels,
@@ -475,18 +472,21 @@ def train_step(
 @partial(
     jax.pmap,
     axis_name="batch_devices",
-    static_broadcasted_argnums=(1, 7),
-    in_axes=(None, None, None, None, 0, 0, 0, None))
+    # static_broadcasted_argnums=(1, 7),
+    static_broadcasted_argnums=(5,),
+    in_axes=(None, None, 0, 0, 0, None))
 def par_loss_and_grad(
-        params,  # 0
-        apply_fn,  # 1
-        batch_stats,  # 2
-        rng,  # 3
-        batch_inputs, # 4
-        batch_labels, # 5
-        batch_integration_timesteps, # 6
-        batchnorm, # 7
+        # params,  # 0
+        # apply_fn,  # 1
+        # batch_stats,  # 2
+        state: train_state.TrainState,
+        rng: jax.random.PRNGKeyArray,  # 3
+        batch_inputs: Tuple[jax.Array, jax.Array], # 4
+        batch_labels: jax.Array, # 5
+        batch_integration_timesteps: Tuple[jax.Array, jax.Array], # 6
+        batchnorm: bool, # 7
     ):
+    # print('tracing par_loss_and_grad')
     def loss_fn(params):
 
         # print('in loss_fn')
@@ -500,14 +500,14 @@ def par_loss_and_grad(
         # print()
 
         if batchnorm:
-            logits, mod_vars = apply_fn( # state.apply_fn( # model.apply(
-                {"params": params, "batch_stats": batch_stats},
+            logits, mod_vars = state.apply_fn( # state.apply_fn( # model.apply(
+                {"params": params, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates", "batch_stats"],
             )
         else:
-            logits, mod_vars = apply_fn( # state.apply_fn( # model.apply(
+            logits, mod_vars = state.apply_fn( # state.apply_fn( # model.apply(
                 {"params": params},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
@@ -519,7 +519,7 @@ def par_loss_and_grad(
 
         return loss, (mod_vars, logits)
 
-    (loss, (mod_vars, logits)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+    (loss, (mod_vars, logits)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
     return loss, mod_vars, grads
 
@@ -529,7 +529,6 @@ def eval_step(batch_inputs,
               batch_integration_timesteps,
               state,
               model,
-              #split_indices,
               batchnorm,
               ):
     if batchnorm:

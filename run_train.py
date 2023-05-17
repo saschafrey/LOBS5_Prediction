@@ -22,8 +22,8 @@ if __name__ == "__main__":
 	# no GPU use at all
 	#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-	#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".25"
+	#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 
 	torch.multiprocessing.set_start_method('spawn')
 
@@ -52,6 +52,8 @@ if __name__ == "__main__":
 	parser.add_argument("--restore_step", type=int)
 	parser.add_argument("--msg_seq_len", type=int, default=500,  # 500
 						help="How many past messages to include in each sample")
+	parser.add_argument("--n_data_workers", type=int, default=16,
+		     			help="number of workers used in DataLoader")
 
 	# Model Parameters
 	parser.add_argument("--n_message_layers", type=int, default=2,  # 2
@@ -140,5 +142,6 @@ if __name__ == "__main__":
 	parser.add_argument("--jax_seed", type=int, default=1919,
 						help="seed randomness")
 
+	#with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
 	train(parser.parse_args())
 	#cProfile.run('train(parser.parse_args())')
