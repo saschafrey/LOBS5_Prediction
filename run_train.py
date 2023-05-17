@@ -23,7 +23,7 @@ if __name__ == "__main__":
 	#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 	#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
+	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".80"
 
 	torch.multiprocessing.set_start_method('spawn')
 
