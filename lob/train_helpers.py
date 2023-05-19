@@ -373,7 +373,7 @@ def device_reshape(
 def train_epoch(
         state,
         rng,
-        model,
+        #model,
         trainloader,
         seq_len,
         in_dim,
@@ -385,7 +385,7 @@ def train_epoch(
     Training function for an epoch that loops over batches.
     """
     # Store Metrics
-    model = model(training=True)
+    #model = model(training=True)
     batch_losses = []
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
@@ -403,9 +403,9 @@ def train_epoch(
             inputs,
             labels,
             integration_times,
-            model,
+            #model,
             batchnorm,
-            num_devices,
+            #num_devices,
         )
         batch_losses.append(loss)
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
@@ -415,15 +415,15 @@ def train_epoch(
     return state, np.mean(np.array(batch_losses)), step
 
 
-def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
+def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
     """Validation function that loops over batches"""
-    model = model(training=False, step_rescale=step_rescale)
+    #model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
     #split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
         loss, acc, pred = eval_step(
-            inputs, labels, integration_timesteps, state, model, batchnorm)
+            inputs, labels, integration_timesteps, state, apply_fn, batchnorm)
         losses = np.append(losses, loss)
         accuracies = np.append(accuracies, acc)
 
@@ -431,22 +431,22 @@ def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=
     return aveloss, aveaccu
 
 # NOTE: jitting pmapped function may cause inefficient data movement between devices
-@partial(jax.jit, static_argnums=(5, 6, 7))
+@partial(jax.jit, static_argnums=(5,))
 def train_step(
         state,
         rng,
         batch_inputs,
         batch_labels,
         batch_integration_timesteps,
-        model,
+        #model,
         batchnorm,
-        num_devices,
+        #num_devices,
     ):
     """ Performs a single training step given a batch of data
         NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
               or only (batched_message_inputs,) if book inputs are not used.
     """
-
+    #print('tracing train_step')
     loss, mod_vars, grads = par_loss_and_grad(
         # state.params,
         # state.apply_fn,
@@ -528,15 +528,24 @@ def eval_step(batch_inputs,
               batch_labels,
               batch_integration_timesteps,
               state,
-              model,
+              #model,
+              apply_fn,
               batchnorm,
               ):
+    # print('tracing eval_step')
+    # print(
+    #     batch_inputs[0].shape,
+    #     batch_inputs[1].shape,
+    #     batch_labels.shape,
+    #     batch_integration_timesteps[0].shape,
+    #     batch_integration_timesteps[1].shape,
+    #     batchnorm)
     if batchnorm:
-        logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
+        logits = apply_fn({"params": state.params, "batch_stats": state.batch_stats},
                              *batch_inputs, *batch_integration_timesteps,
                              )
     else:
-        logits = model.apply({"params": state.params},
+        logits = apply_fn({"params": state.params},
                              *batch_inputs, *batch_integration_timesteps,
                              )
 

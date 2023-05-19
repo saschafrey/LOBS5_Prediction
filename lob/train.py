@@ -65,6 +65,8 @@ def train(args):
             msg_seq_len=args.msg_seq_len,
             bsz=args.bsz,
             use_book_data=args.use_book_data,
+            use_simple_book=args.use_simple_book,
+            book_transform=args.book_transform,
             n_data_workers=args.n_data_workers,
         )
 
@@ -95,6 +97,9 @@ def train(args):
     lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
     step = 0  # for per step learning rate decay
     steps_per_epoch = int(train_size/args.bsz)
+
+    val_model = model_cls(training=False, step_rescale=1)
+
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
 
@@ -121,7 +126,8 @@ def train(args):
         train_rng, skey = random.split(train_rng)
         state, train_loss, step = train_epoch(state,
                                               skey,
-                                              model_cls,
+                                              #model_cls,
+                                              #train_model,
                                               trainloader,
                                               seq_len,
                                               in_dim,
@@ -140,7 +146,8 @@ def train(args):
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation...")
             val_loss, val_acc = validate(state,
-                                         model_cls,
+                                         #model_cls,
+                                         val_model.apply,
                                          valloader,
                                          seq_len,
                                          in_dim,
@@ -148,7 +155,8 @@ def train(args):
 
             print(f"[*] Running Epoch {epoch + 1} Test...")
             test_loss, test_acc = validate(state,
-                                           model_cls,
+                                           #model_cls,
+                                           val_model.apply,
                                            testloader,
                                            seq_len,
                                            in_dim,

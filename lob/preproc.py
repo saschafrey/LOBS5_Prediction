@@ -1,4 +1,6 @@
 from __future__ import annotations
+import jax
+import jax.numpy as jnp
 import argparse
 from pathlib import Path
 from typing import Optional
@@ -6,8 +8,47 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from glob import glob
+from functools import partial
 
 from lob.encoding import Vocab, Message_Tokenizer
+
+
+@partial(jax.jit, static_argnums=(1, 2), backend='cpu')
+@partial(
+    jax.vmap,
+    in_axes=(0, None, None),
+    out_axes=0,
+)
+def transform_L2_state(
+        book: jax.Array, 
+        price_levels: int,
+        tick_size: int = 100,
+        #divide_by: int = 1,
+    ) -> jax.Array:
+    """ Transformation for data loading:
+        Converts L2 book state from data to price_levels many volume
+        series used as input to the model. The first element (column) of the
+        input and output is the change in mid price.
+        Converts sizes to negative sizes for ask side (sell orders).
+    """
+    delta_p_mid, book = book[:1], book[1:]
+    book = book.reshape((-1,2))
+    mid_price = jnp.round((book[0, 0] + book[1, 0]) / 2, -2).astype(int)
+    book = book.at[:, 0].set((book[:, 0] - mid_price) // tick_size)
+    # change relative prices to indices
+    book = book.at[:, 0].set(book[:, 0] + price_levels // 2)
+    # set to out of bounds index, so that we can use -1 to indicate nan
+    # out of bounds will be ignored in setting value in jax
+    book = jnp.where(book < 0, -price_levels-1, book)
+
+    mybook = jnp.zeros(price_levels, dtype=jnp.int32)
+    mybook = mybook.at[book[:, 0]].set(book[:, 1])
+    
+    # set ask volume to negative (sell orders)
+    mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
+    mybook = jnp.concatenate((delta_p_mid, mybook))
+
+    return mybook.astype(jnp.float32) #/ divide_by
 
 
 def process_message_files(
@@ -120,7 +161,10 @@ def process_book_files(
         if not use_raw_book_repr:
             book = process_book(book, price_levels=n_price_series)
         else:
-            book = book.values
+            # prepend delta mid price column to book data
+            p_ref = ((book.iloc[:, 0] + book.iloc[:, 2]) / 2).round(-2).astype(int)
+            mid_diff = p_ref.div(100).diff().fillna(0).astype(int)
+            book = np.concatenate((mid_diff.values.reshape(-1,1), book.values), axis=1)
 
         np.save(b_path, book, allow_pickle=True)
 

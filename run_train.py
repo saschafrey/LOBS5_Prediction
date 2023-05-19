@@ -23,7 +23,7 @@ if __name__ == "__main__":
 	#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 	#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".80"
+	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".9"
 
 	torch.multiprocessing.set_start_method('spawn')
 
@@ -47,6 +47,10 @@ if __name__ == "__main__":
 		     			help="use book data in addition to message data")
 	parser.add_argument("--use_simple_book", type=str2bool, default=False,
 		     			help="use raw price (-p0) and volume series instead of 'volume image representation'")
+	parser.add_argument("--book_transform", type=str2bool, default=False,
+		     			help="transform loaded book data to volume image repr. in dataloader")
+	parser.add_argument("--book_depth", type=int, default=500,
+		     			help="number of tick levels to use in book data [if book_transform=True]")
 	parser.add_argument("--restore", type=str,
 		     			help="if given restore from given checkpoint dir")
 	parser.add_argument("--restore_step", type=int)

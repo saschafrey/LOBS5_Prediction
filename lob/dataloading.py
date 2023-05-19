@@ -24,6 +24,9 @@ def create_lobster_prediction_dataset(
 		msg_seq_len: int = 500,
 		bsz: int=128,
 		use_book_data: bool = False,
+		use_simple_book: bool = False,
+		book_transform: bool = False,
+		book_depth: int = 500,
 		n_data_workers: int = 0
 	) -> ReturnType:
 	""" 
@@ -44,6 +47,10 @@ def create_lobster_prediction_dataset(
 		mask_fn=mask_fn,
 		msg_seq_len=msg_seq_len,
 		use_book_data=use_book_data,
+		use_simple_book=use_simple_book,
+		book_transform=book_transform,
+		book_depth=book_depth,
+		n_cache_files=1e7,  # large number to keep everything in cache
 	)
 	dataset_obj.setup()
 
@@ -57,12 +64,13 @@ def create_lobster_prediction_dataset(
 	# 	dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
 	trn_loader = create_lobster_train_loader(
 		dataset_obj, seed, bsz, n_data_workers, reset_train_offsets=False)
+	# NOTE: drop_last=True recompiles the model for a smaller batch size
 	val_loader = make_data_loader(
 		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz,
-		drop_last=False, shuffle=False, num_workers=n_data_workers)
+		drop_last=True, shuffle=False, num_workers=n_data_workers)
 	tst_loader = make_data_loader(
 		dataset_obj.dataset_test, dataset_obj, seed=seed, batch_size=bsz,
-		drop_last=False, shuffle=False, num_workers=n_data_workers)
+		drop_last=True, shuffle=False, num_workers=n_data_workers)
 
 	N_CLASSES = dataset_obj.d_output
 	SEQ_LENGTH = dataset_obj.L

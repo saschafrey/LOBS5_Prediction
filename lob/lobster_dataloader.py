@@ -5,16 +5,24 @@ import sys
 from typing import Sequence
 import numpy as np
 from collections import OrderedDict
-import torch
-import torchvision
+
+#import os
+#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+
+#import torch
+#import torchvision
 from torch.utils.data import Dataset, Subset, Sampler
 from glob import glob
 import pandas as pd
+import jax
+# Global flag to set a specific platform, must be used at startup.
+#jax.config.update('jax_platform_name', 'cpu')
 import jax.numpy as jnp
 from jax.nn import one_hot
-from jax.experimental import sparse
+# from jax.experimental import sparse
 
 from lob.encoding import Vocab, Message_Tokenizer
+from lob.preproc import transform_L2_state
 from s5.dataloaders.base import default_data_path, SequenceDataset
 from s5.utils import permutations
 default_data_path = Path(__file__).parent.parent.absolute()
@@ -172,9 +180,13 @@ class LOBSTER_Dataset(Dataset):
             *,
             book_files=None,
             use_simple_book=False,
+            book_transform=False,
+            book_depth=500,
             ) -> None:
 
         assert len(message_files) > 0
+        assert not (use_simple_book and book_transform)
+
         self.message_files = message_files #
         if book_files is not None:
             assert len(book_files) == len(message_files)
@@ -184,6 +196,8 @@ class LOBSTER_Dataset(Dataset):
         else:
             self.use_book_data = False
         self.use_simple_book = use_simple_book
+        self.book_transform = book_transform
+        self.book_depth = book_depth
 
         self.num_days = len(self.message_files)
         self.n_messages = n_messages
@@ -210,8 +224,11 @@ class LOBSTER_Dataset(Dataset):
 
     def _set_book_dims(self):
         if self.use_book_data:
-            b = np.load(self.book_files[0], mmap_mode='r', allow_pickle=True)
-            self.d_book = b.shape[1]
+            if self.book_transform:
+                self.d_book = self.book_depth + 1
+            else:
+                b = np.load(self.book_files[0], mmap_mode='r', allow_pickle=True)
+                self.d_book = b.shape[1]
             # TODO: generalize to L3 data
             self.L_book = self.n_messages
         else:
@@ -268,17 +285,23 @@ class LOBSTER_Dataset(Dataset):
         if self.use_book_data:
             # first message is already dropped, so we can use
             # the book state with the same index (prior to the message)
-            book = book[seq_start: seq_end]#.reshape(-1)
+            book = book[seq_start: seq_end].copy()#.reshape(-1)
+
+            # tranform from L2 (price volume) representation to fixed volume image 
+            if self.book_transform:
+                book = jax.device_put(book, device=jax.devices("cpu")[0])
+                book = np.array(transform_L2_state(book, self.book_depth, 100))
 
             # use raw price, volume series, rather than volume image
             # subtract initial price to start all sequences around 0
             if self.use_simple_book:
                 # normalize slighly (batch norm should do this better)
-                book = book.copy().astype(np.float32) / 1000
-                p_mid_0 = (book[0, 0] + book[0, 2]) / 2
-                book[:, ::2] = (book[:, ::2] - p_mid_0)
+                #book = book.copy().astype(np.float32) / 1000
+                # CAVE: first colum is Delta mid price
+                p_mid_0 = (book[0, 1] + book[0, 3]) / 2
+                book[:, 1::2] = (book[:, 1::2] - p_mid_0)
                 # divide volume by 100
-                #book[:, 1::2] = book[:, 1::2] / 100
+                #book[:, 2::2] = book[:, 2::2] / 100
 
             ret_tuple = X, y, book
         else:
@@ -292,9 +315,9 @@ class LOBSTER_Dataset(Dataset):
             _ = self._message_cache.popitem(last=False)
             _ = self._book_cache.popitem(last=False)
             del _
-        Xm = np.load(self.message_files[file_idx])#, mmap_mode='r')
+        Xm = np.load(self.message_files[file_idx], mmap_mode='r')
         self._message_cache[file_idx] = Xm
-        Xb = np.load(self.book_files[file_idx])#, mmap_mode='r')
+        Xb = np.load(self.book_files[file_idx], mmap_mode='r')
         self._book_cache[file_idx] = Xb
 
     '''
@@ -520,6 +543,9 @@ class LOBSTER(SequenceDataset):
             "mask_fn": LOBSTER_Dataset.random_mask,
             "use_book_data": False,
             "use_simple_book" : False,
+            "book_transform": False,
+            "n_cache_files": 0,
+            "book_depth": 500,
         }
 
     def setup(self):
@@ -564,16 +590,18 @@ class LOBSTER(SequenceDataset):
             self.val_files, self.val_book_files = zip(*self.val_files)
 
         # TODO: make n_cache_files a parameter
-        n_cache_files = 0
+        #n_cache_files = 0
         self.dataset_train = LOBSTER_Dataset(
             self.train_files,
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_cache_files=n_cache_files,
+            n_cache_files=self.n_cache_files,
             randomize_offset=True,
             book_files=self.train_book_files,
             use_simple_book=self.use_simple_book,
+            book_transform=self.book_transform,
+            book_depth=self.book_depth,
         )
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = len(self.dataset_train.vocab)
@@ -590,10 +618,12 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_cache_files=n_cache_files,
-            randomize_offset=True,
+            n_cache_files=self.n_cache_files,
+            randomize_offset=False,
             book_files=self.val_book_files,
             use_simple_book=self.use_simple_book,
+            book_transform=self.book_transform,
+            book_depth=self.book_depth,
         )
 
         self.dataset_test = LOBSTER_Dataset(
@@ -601,10 +631,12 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_cache_files=n_cache_files,
+            n_cache_files=self.n_cache_files,
             randomize_offset=False,
             book_files=self.test_book_files,
             use_simple_book=self.use_simple_book,
+            book_transform=self.book_transform,
+            book_depth=self.book_depth,
         )
 
         # TODO: remove
@@ -617,7 +649,6 @@ class LOBSTER(SequenceDataset):
             keeps the same validation set and removes validation
             indices from training set
         """
-        n_cache_files = 0
         # use a new seed for the train dataset to
         # get a different random offset for each sequence for each epoch
         self.dataset_train = LOBSTER_Dataset(
@@ -625,9 +656,12 @@ class LOBSTER(SequenceDataset):
             n_messages=self.n_messages,
             mask_fn=self.mask_fn,
             seed=self.rng.randint(0, sys.maxsize),
-            n_cache_files=n_cache_files,
+            n_cache_files=self.n_cache_files,
             randomize_offset=True,
             book_files=self.train_book_files,
+            use_simple_book=self.use_simple_book,
+            book_transform=self.book_transform,
+            book_depth=self.book_depth,
         )
     #     indices = [i for i in range(len(self.dataset_train)) if i not in self.val_indices]
     #     # remove the first and last val sequence to avoid overlapping observations
