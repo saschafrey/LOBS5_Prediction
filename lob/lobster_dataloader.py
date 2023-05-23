@@ -128,6 +128,41 @@ class LOBSTER_Dataset(Dataset):
         for f in hidden_fields:
             seq[-1][slice(*LOBSTER_Dataset._get_tok_slice_i(f))] = Vocab.HIDDEN_TOK
         return seq, y
+    
+    #@jax.jit
+    # @staticmethod
+    # def causal_mask(seq, rng):
+    #     """ Select random field (e.g price) in most recent message
+    #         for which one token is MSKd (tokens left of MSK are know,
+    #         right of MSK are NA). MSK token becomes prediction target.
+    #         Random subset of other fields are also set to NA.
+    #         This simulates the causal prediction task, where fields
+    #         can be predicted in arbitrary order.
+    #     """
+    #     def get_tok_slice_i(field_i):
+    #         i_start = ([0] + list(Message_Tokenizer.TOK_DELIM))[field_i]
+    #         field_len = Message_Tokenizer.TOK_LENS[field_i]
+    #         return i_start, i_start + field_len
+        
+    #     seq = seq.copy()
+    #     #hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
+    #     #hidden_fields, msk_field = LOBSTER_Dataset._select_unconditional_mask(rng)
+    #     hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask(rng)
+
+    #     i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
+    #     msk_i = rng.integers(i_start, i_end)
+    #     #msk_i = jax.random.randint(rng, (1,), minval=i_start, maxval=i_end)
+    #     # select random token from last message from selected field
+    #     y = seq[-1][msk_i]
+    #     seq = seq.at[-1, msk_i].set(Vocab.MASK_TOK)
+    #     # set tokens after MSK token to HIDDEN for masked field
+    #     if msk_i < (i_end - 1):
+    #         seq = seq.at[-1, msk_i + 1: i_end].set(Vocab.HIDDEN_TOK)
+    #     # set all hidden_fields to HIDDEN
+    #     for f in hidden_fields:
+    #         seq = seq.at[-1, slice(*get_tok_slice_i(f))].set(
+    #             Vocab.HIDDEN_TOK)
+    #     return seq, y
 
     @staticmethod
     def _select_random_causal_mask(rng):
@@ -152,7 +187,7 @@ class LOBSTER_Dataset(Dataset):
         sel_fields = list(range(n_fields))
         msk_field = sel_fields.pop(rng.integers(0, n_fields))
         return sel_fields, msk_field
-
+    
     @staticmethod
     def _select_sequential_causal_mask(rng):
         """ Select tokens from start to random field for HID
@@ -162,6 +197,15 @@ class LOBSTER_Dataset(Dataset):
         msk_field = rng.integers(0, n_fields)
         #return tuple(range(msk_field)), msk_field
         return tuple(range(msk_field + 1, n_fields)), msk_field
+
+    # @staticmethod
+    # def _select_sequential_causal_mask(rng):
+    #     """ Select tokens from start to random field for HID
+    #         followed by one MSK
+    #     """
+    #     n_fields = len(Message_Tokenizer.FIELDS)
+    #     msk_field = jax.random.randint(rng, (1,), minval=0, maxval=n_fields)
+    #     return jnp.arange(msk_field + 1, n_fields, dtype=jnp.int32), msk_field
 
     @staticmethod
     def _get_tok_slice_i(field_i):
@@ -208,6 +252,7 @@ class LOBSTER_Dataset(Dataset):
         self.seq_len = self.n_messages * Message_Tokenizer.MSG_LEN
         self.mask_fn = mask_fn
         self.rng = np.random.default_rng(seed)
+        self.rng_jax = jax.random.PRNGKey(seed)
         self.randomize_offset = randomize_offset
         self._reset_offsets()
         self._set_book_dims()
@@ -268,6 +313,7 @@ class LOBSTER_Dataset(Dataset):
             if file_idx not in self._message_cache:
                 self._add_to_cache(file_idx)
 
+            #print('fetching from cache')
             X = self._message_cache[file_idx]
             if self.use_book_data:
                 book = self._book_cache[file_idx]
@@ -279,6 +325,7 @@ class LOBSTER_Dataset(Dataset):
         X = X[seq_start: seq_end]
         # apply mask and extract prediction target token
         X, y = self.mask_fn(X, self.rng)
+        #X, y = self.mask_fn(X, self.rng_jax)
         X, y = X.reshape(-1), y.reshape(-1)
         # TODO: look into aux_data (could we still use time when available?)
 

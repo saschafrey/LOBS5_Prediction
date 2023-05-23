@@ -151,7 +151,8 @@ def train(args):
                                          valloader,
                                          seq_len,
                                          in_dim,
-                                         args.batchnorm)
+                                         args.batchnorm,
+                                         args.num_devices)
 
             print(f"[*] Running Epoch {epoch + 1} Test...")
             test_loss, test_acc = validate(state,
@@ -160,7 +161,8 @@ def train(args):
                                            testloader,
                                            seq_len,
                                            in_dim,
-                                           args.batchnorm)
+                                           args.batchnorm,
+                                           args.num_devices)
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
             print(

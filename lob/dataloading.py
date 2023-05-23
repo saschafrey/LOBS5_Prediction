@@ -96,6 +96,7 @@ def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train
 		seed=seed,
 		batch_size=bsz,
 		#sampler=trn_sampler,
+		shuffle=True,  # TODO: remove later
 		num_workers=num_workers)
 	return trn_loader
 
