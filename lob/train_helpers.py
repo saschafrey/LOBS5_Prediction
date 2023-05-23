@@ -485,7 +485,7 @@ def device_reshape(
         timestep_msg: Optional[jax.Array] = None,
         timestep_book: Optional[jax.Array] = None,
     ) -> Tuple:
-    """ Arrays should still be in RAM, not on device.
+    """ 
     """
     #inputs = jax.device_put(inputs, jax.devices('cpu')[0])
     inputs = np.reshape(inputs, (num_devices, -1, *inputs.shape[1:]))
@@ -534,6 +534,11 @@ def train_epoch(
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim, num_devices)
+        # print('inputs[0].shape', inputs[0].shape)
+        # print('inputs[1].shape', inputs[1].shape)
+        # print('labels.shape)', labels.shape)
+        # print('integration_times[0].shape', integration_times[0].shape)
+        # print('integration_times[1].shape', integration_times[1].shape)
         # add device dimension and split batch between devices
         # inputs, labels, integration_times = device_reshape(
         #     inputs, labels, integration_times, num_devices)
@@ -555,8 +560,8 @@ def train_epoch(
         state, step = update_learning_rate_per_step(lr_params, state)
 
         # TODO: remove
-        if batch_idx == 1000:
-            break
+        # if batch_idx == 1000:
+        #     break
 
     # Return average loss over batches
     return state, np.mean(np.array(batch_losses)), step
@@ -596,6 +601,8 @@ def train_step(
         NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
               or only (batched_message_inputs,) if book inputs are not used.
     """
+    #print(batch_inputs[1][0, 0, -1])
+
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     #print('tracing train_step')
     #loss, mod_vars, grads = par_loss_and_grad(
@@ -625,21 +632,21 @@ def train_step(
     #state, loss = update_step(loss, state, grads, mod_vars, batchnorm)
     return state, loss
 
-@partial(
-    jax.jit,
-    backend='gpu',
-    static_argnums=(4,))
-def update_step(loss, state, grads, mod_vars, batchnorm):
-    # calculate means over device dimension (first)
-    loss = loss.mean()
-    grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
+# @partial(
+#     jax.jit,
+#     backend='gpu',
+#     static_argnums=(4,))
+# def update_step(loss, state, grads, mod_vars, batchnorm):
+#     # calculate means over device dimension (first)
+#     loss = loss.mean()
+#     grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
 
-    if batchnorm:
-        mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
-        state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
-    else:
-        state = state.apply_gradients(grads=grads)
-    return state, loss
+#     if batchnorm:
+#         mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
+#         state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
+#     else:
+#         state = state.apply_gradients(grads=grads)
+#     return state, loss
 
 @partial(
     jax.pmap, backend='gpu',

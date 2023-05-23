@@ -56,7 +56,7 @@ if __name__ == "__main__":
 	parser.add_argument("--restore_step", type=int)
 	parser.add_argument("--msg_seq_len", type=int, default=500,  # 500
 						help="How many past messages to include in each sample")
-	parser.add_argument("--n_data_workers", type=int, default=16,
+	parser.add_argument("--n_data_workers", type=int, default=0,
 		     			help="number of workers used in DataLoader")
 
 	# Model Parameters
