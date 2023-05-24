@@ -650,9 +650,10 @@ def train_step(
 
 @partial(
     jax.pmap, backend='gpu',
+    #jax.vmap,
     axis_name="batch_devices",
     # static_broadcasted_argnums=(1, 7),
-    static_broadcasted_argnums=(5,),
+    static_broadcasted_argnums=(5,),  # TODO: revert to 5 for batchnorm in pmap
     #in_axes=(None, None, 0, 0, 0, None))
     in_axes=(0, None, 0, 0, 0, None),
     out_axes=(0, 0))
@@ -676,11 +677,17 @@ def par_loss_and_grad(
         # print('batch_inputs[0].shape', batch_inputs[0].shape)
         # print('batch_integration_timesteps[0].shape', batch_integration_timesteps[0].shape)
         # print('batch_labels.shape', batch_labels.shape)
+        # print('msg', batch_inputs[0])
+        # print('book', batch_inputs[1])
+        # print('timesteps msg', batch_integration_timesteps[0])
+        # print('timesteps book', batch_integration_timesteps[1])
         # print('param shapes:')
         # jax.tree_map(lambda x: print(x.shape), params)
         # print()
 
         if batchnorm:
+            # print(state.batch_stats)
+            # print()
             logits, mod_vars = state.apply_fn( # state.apply_fn( # model.apply(
                 {"params": params, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,

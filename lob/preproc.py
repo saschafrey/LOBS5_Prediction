@@ -33,7 +33,7 @@ def transform_L2_state(
     """
     delta_p_mid, book = book[:1], book[1:]
     book = book.reshape((-1,2))
-    mid_price = jnp.round((book[0, 0] + book[1, 0]) / 2, -2).astype(int)
+    mid_price = jnp.ceil((book[0, 0] + book[1, 0]) / (2*tick_size)).__mul__(tick_size).astype(int)
     book = book.at[:, 0].set((book[:, 0] - mid_price) // tick_size)
     # change relative prices to indices
     book = book.at[:, 0].set(book[:, 0] + price_levels // 2)

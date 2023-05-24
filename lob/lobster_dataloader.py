@@ -336,7 +336,7 @@ class LOBSTER_Dataset(Dataset):
 
             # tranform from L2 (price volume) representation to fixed volume image 
             if self.book_transform:
-                book = jax.device_put(book, device=jax.devices("cpu")[0])
+                #book = jax.device_put(book, device=jax.devices("cpu")[0])
                 book = np.array(transform_L2_state(book, self.book_depth, 100))
 
             # use raw price, volume series, rather than volume image
