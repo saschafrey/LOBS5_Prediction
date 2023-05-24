@@ -46,9 +46,14 @@ def transform_L2_state(
     
     # set ask volume to negative (sell orders)
     mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
-    mybook = jnp.concatenate((delta_p_mid, mybook))
+    # mybook = jnp.concatenate((delta_p_mid, mybook))
+    mybook = jnp.concatenate((
+        delta_p_mid.astype(np.float32),
+        mybook.astype(np.float32) / 1000
+    ))
 
-    return mybook.astype(jnp.float32) #/ divide_by
+    # return mybook.astype(jnp.float32) #/ divide_by
+    return mybook 
 
 
 def process_message_files(

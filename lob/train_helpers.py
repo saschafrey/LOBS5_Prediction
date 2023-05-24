@@ -316,45 +316,6 @@ def cross_entropy_loss(logits, label):
 def compute_accuracy(logits, label):
     return np.argmax(logits) == label
 
-# def prep_batch(batch: tuple,
-#                seq_len: int,
-#                in_dim: int) -> Tuple[Tuple, np.ndarray, Tuple]:
-#     """
-#     Take a batch and convert it to a standard x/y format.
-#     :param batch:       (x, y, aux_data) as returned from dataloader.
-#     :param seq_len:     (int) length of sequence.
-#     :param in_dim:      (int) dimension of input.
-#     :return:
-#     """
-#     if len(batch) == 2:
-#         inputs, targets = batch
-#         aux_data = {}
-#     elif len(batch) == 3:
-#         inputs, targets, aux_data = batch
-#     else:
-#         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
-
-#     assert inputs.shape[1] == seq_len
-
-#     inputs = one_hot(np.asarray(inputs), in_dim)
-
-#     # If there is an aux channel containing the integration times, then add that.
-#     if 'timesteps_msg' in aux_data:
-#         integration_timesteps = (np.diff(np.asarray(aux_data['timesteps_msg'])), )
-#     else:
-#         integration_timesteps = (np.ones((len(inputs), seq_len)), )
-
-#     if "book_data" in aux_data:
-#         full_inputs = (inputs.astype(float), np.asarray(aux_data['book_data']))
-#         if "timesteps_book" in aux_data:
-#             integration_timesteps += (np.diff(np.asarray(aux_data['timesteps_book'])), )
-#         else:
-#             integration_timesteps += (np.ones((len(inputs), seq_len)), )
-#     else:
-#         full_inputs = (inputs.astype(float), )
-
-#     return full_inputs, np.squeeze(targets.astype(float)), integration_timesteps
-
 def prep_batch(
         batch: Union[
             Tuple[onp.ndarray, onp.ndarray, Dict[str, onp.ndarray]],
@@ -398,11 +359,8 @@ def prep_batch(
 
     return inputs, labels, integration_times
 
-# @partial(jax.jit, static_argnums=(2, 3), backend='cpu')
-# @partial(
-#     jax.vmap,
-#     in_axes=(0, 0, None, None, 0, 0, 0))
 @partial(
+#    jax.vmap,
     jax.pmap,
     axis_name="batch_devices",
     static_broadcasted_argnums=(2, 3),
@@ -426,9 +384,6 @@ def _prep_batch_par(
     """
     #print('tracing _prep_batch_par')
 
-    #inputs = jax.device_put(inputs, jax.devices()[0])
-    #targets = jax.device_put(targets, jax.devices()[0])
-
     assert inputs.shape[1] == seq_len
     inputs = one_hot(inputs, in_dim)
 
@@ -451,30 +406,7 @@ def _prep_batch_par(
         full_inputs = (inputs.astype(np.float32), )
 
     #return full_inputs, np.squeeze(targets.astype(float)), integration_timesteps
-    return full_inputs, targets, integration_timesteps
-
-
-# def device_reshape(
-#         inputs: Tuple,
-#         targets: np.ndarray,
-#         integration_timesteps: Tuple,
-#         n_devices: int
-#     ) -> Tuple:
-#     """
-#     Reshape inputs, targets, and integration timesteps for multi-device training.
-#     :param inputs:                  (tuple) inputs as returned from prep_batch.
-#     :param targets:                 (np.ndarray) targets as returned from prep_batch.
-#     :param integration_timesteps:   (tuple) integration timesteps as returned from prep_batch.
-#     :param n_devices:               (int) number of devices.
-#     :return:
-#     """
-#     inputs = tuple([np.reshape(x, (n_devices, -1, *x.shape[1:])) for x in inputs])
-#     targets = np.reshape(targets, (n_devices, -1, *targets.shape[1:]))
-#     integration_timesteps = tuple(
-#         [np.reshape(x, (n_devices, -1, *x.shape[1:])) for x in integration_timesteps]
-#     )
-
-#     return inputs, targets, integration_timesteps
+    return full_inputs, targets.astype(np.float32), integration_timesteps
 
 @partial(jax.jit, static_argnums=(0,), backend='gpu')# backend='cpu')
 def device_reshape(
@@ -487,24 +419,14 @@ def device_reshape(
     ) -> Tuple:
     """ 
     """
-    #inputs = jax.device_put(inputs, jax.devices('cpu')[0])
     inputs = np.reshape(inputs, (num_devices, -1, *inputs.shape[1:]))
-    #inputs = jax.device_put_sharded(list(inputs), jax.local_devices()[:num_devices])
-    #targets = jax.device_put(targets, jax.devices('cpu')[0])
     targets = np.reshape(targets, (num_devices, -1, *targets.shape[1:]))
-    #targets = jax.device_put_sharded(list(targets), jax.local_devices()[:num_devices])
     if book_data is not None:
-        #book_data = jax.device_put(book_data, jax.devices('cpu')[0])
         book_data = np.reshape(book_data, (num_devices, -1, *book_data.shape[1:]))
-        #book_data = jax.device_put_sharded(list(book_data), jax.local_devices()[:num_devices])
     if timestep_msg is not None:
-        #timestep_msg = jax.device_put(timestep_msg, jax.devices('cpu')[0])
         timestep_msg = np.reshape(timestep_msg, (num_devices, -1, *timestep_msg.shape[1:]))
-        #timestep_msg = jax.device_put_sharded(list(timestep_msg), jax.local_devices()[:num_devices])
     if timestep_book is not None:
-        #timestep_book = jax.device_put(timestep_book, jax.devices('cpu')[0])
         timestep_book = np.reshape(timestep_book, (num_devices, -1, *timestep_book.shape[1:]))
-        #timestep_book = jax.device_put_sharded(list(timestep_book), jax.local_devices()[:num_devices])
     return inputs, targets, book_data, timestep_msg, timestep_book
 
 
@@ -527,9 +449,6 @@ def train_epoch(
     batch_losses = []
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
-
-    # replicate train state across GPUs for potential speed up
-    #state = jax.device_put_replicated(state, jax.devices())
 
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
@@ -555,7 +474,8 @@ def train_epoch(
             #num_devices,
         )
 
-        batch_losses.append(loss)
+        # losses are already averaged across devices (--> should be all the same here)
+        batch_losses.append(loss[0])
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
         state, step = update_learning_rate_per_step(lr_params, state)
 
@@ -567,85 +487,54 @@ def train_epoch(
     return state, np.mean(np.array(batch_losses)), step
 
 
-def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_devices, step_rescale=1.0):
-    """Validation function that loops over batches"""
-    #model = model(training=False, step_rescale=step_rescale)
-    losses, accuracies, preds = np.array([]), np.array([]), np.array([])
-    #split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
-    for batch_idx, batch in enumerate(tqdm(testloader)):
-        inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim, num_devices)
-        loss, acc, pred = eval_step(
-            inputs, labels, integration_timesteps, state, apply_fn, batchnorm)
-        losses = np.append(losses, loss)
-        accuracies = np.append(accuracies, acc)
+# # NOTE: jitting pmapped function may cause inefficient data movement between devices
+# # @partial(
+# #     jax.jit,
+# #     backend='gpu',
+# #     static_argnums=(5,))
+# def train_step_OLD(
+#         state,
+#         rng,
+#         batch_inputs,
+#         batch_labels,
+#         batch_integration_timesteps,
+#         #model,
+#         batchnorm,
+#         #num_devices,
+#     ):
+#     """ Performs a single training step given a batch of data
+#         NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
+#               or only (batched_message_inputs,) if book inputs are not used.
+#     """
+#     #print(batch_inputs[1][0, 0, -1])
 
-    aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
-    return aveloss, aveaccu
+#     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+#     #print('tracing train_step')
+#     #loss, mod_vars, grads = par_loss_and_grad(
+#     #jax.tree_map(lambda x: print(x.shape), state)
+#     state, loss = par_loss_and_grad(
+#         # state.params,
+#         # state.apply_fn,
+#         # state.batch_stats,
+#         state,
+#         rng,
+#         batch_inputs,
+#         batch_labels,
+#         batch_integration_timesteps,
+#         batchnorm
+#     )
 
-# NOTE: jitting pmapped function may cause inefficient data movement between devices
-# @partial(
-#     jax.jit,
-#     backend='gpu',
-#     static_argnums=(5,))
-def train_step(
-        state,
-        rng,
-        batch_inputs,
-        batch_labels,
-        batch_integration_timesteps,
-        #model,
-        batchnorm,
-        #num_devices,
-    ):
-    """ Performs a single training step given a batch of data
-        NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
-              or only (batched_message_inputs,) if book inputs are not used.
-    """
-    #print(batch_inputs[1][0, 0, -1])
+#     # # calculate means over device dimension (first)
+#     # loss = loss.mean()
+#     # mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
+#     # grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
 
-    #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
-    #print('tracing train_step')
-    #loss, mod_vars, grads = par_loss_and_grad(
-    #jax.tree_map(lambda x: print(x.shape), state)
-    state, loss = par_loss_and_grad(
-        # state.params,
-        # state.apply_fn,
-        # state.batch_stats,
-        state,
-        rng,
-        batch_inputs,
-        batch_labels,
-        batch_integration_timesteps,
-        batchnorm
-    )
+#     # if batchnorm:
+#     #     state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
+#     # else:
+#     #     state = state.apply_gradients(grads=grads)
 
-    # # calculate means over device dimension (first)
-    # loss = loss.mean()
-    # mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
-    # grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
-
-    # if batchnorm:
-    #     state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
-    # else:
-    #     state = state.apply_gradients(grads=grads)
-
-    #state, loss = update_step(loss, state, grads, mod_vars, batchnorm)
-    return state, loss
-
-# @partial(
-#     jax.jit,
-#     backend='gpu',
-#     static_argnums=(4,))
-# def update_step(loss, state, grads, mod_vars, batchnorm):
-#     # calculate means over device dimension (first)
-#     loss = loss.mean()
-#     grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
-
-#     if batchnorm:
-#         mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
-#         state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
-#     else:
-#         state = state.apply_gradients(grads=grads)
+#     #state, loss = update_step(loss, state, grads, mod_vars, batchnorm)
 #     return state, loss
 
 @partial(
@@ -657,7 +546,7 @@ def train_step(
     #in_axes=(None, None, 0, 0, 0, None))
     in_axes=(0, None, 0, 0, 0, None),
     out_axes=(0, 0))
-def par_loss_and_grad(
+def train_step(
         # params,  # 0
         # apply_fn,  # 1
         # batch_stats,  # 2
@@ -723,7 +612,21 @@ def par_loss_and_grad(
     #return loss, mod_vars, grads, state
     return state, loss
 
-#@partial(jax.jit, static_argnums=(4, 5))
+def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_devices, step_rescale=1.0):
+    """Validation function that loops over batches"""
+    #model = model(training=False, step_rescale=step_rescale)
+    losses, accuracies, preds = np.array([]), np.array([]), np.array([])
+    #split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
+    for batch_idx, batch in enumerate(tqdm(testloader)):
+        inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim, num_devices)
+        loss, acc, pred = eval_step(
+            inputs, labels, integration_timesteps, state, apply_fn, batchnorm)
+        losses = np.append(losses, loss)
+        accuracies = np.append(accuracies, acc)
+
+    aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
+    return aveloss, aveaccu
+
 @partial(
     jax.pmap,
     axis_name="batch_devices",
@@ -731,22 +634,15 @@ def par_loss_and_grad(
     static_broadcasted_argnums=(4,5),
     #in_axes=(0, 0, 0, None, None, None))
     in_axes=(0, 0, 0, 0, None, None))
-def eval_step(batch_inputs,
-              batch_labels,
-              batch_integration_timesteps,
-              state,
-              #model,
-              apply_fn,
-              batchnorm,
-              ):
-    #print('tracing eval_step')
-    # print(
-    #     batch_inputs[0].shape,
-    #     batch_inputs[1].shape,
-    #     batch_labels.shape,
-    #     batch_integration_timesteps[0].shape,
-    #     batch_integration_timesteps[1].shape,
-    #     batchnorm)
+def eval_step(
+        batch_inputs,
+        batch_labels,
+        batch_integration_timesteps,
+        state,
+        #model,
+        apply_fn,
+        batchnorm,
+    ):
     if batchnorm:
         logits = apply_fn({"params": state.params, "batch_stats": state.batch_stats},
                              *batch_inputs, *batch_integration_timesteps,
@@ -756,21 +652,7 @@ def eval_step(batch_inputs,
                              *batch_inputs, *batch_integration_timesteps,
                              )
 
-    #losses = cross_entropy_loss(logits, batch_labels) / (len(split_indices) + 1)
-    #losses = weighted_loss(logits, batch_labels)
-    losses = cross_entropy_loss(logits, batch_labels)
-    
+    losses = cross_entropy_loss(logits, batch_labels)    
     accs = compute_accuracy(logits, batch_labels)
-    #accs = weighted_accuracy_and_rmse(logits, batch_labels)
-
-    # calculate mean accuracy per classification task (e.g. price, order_type etc)
-    #accs = np.mean(  # mean over different classification tasks
-    #        np.array([
-    #            compute_accuracy(log, lab) for log, lab in zip(
-    #                np.split(logits, split_indices, axis=1),
-    #                np.split(batch_labels, split_indices, axis=1))
-    #        ]),
-    #    axis=0
-    #)
 
     return losses, accs, logits
