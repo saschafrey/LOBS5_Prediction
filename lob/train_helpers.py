@@ -294,7 +294,6 @@ def create_train_state(model_cls,
     state = jax_utils.replicate(state)
     return state
 
-
 def get_slices(dims):
     slices = []
     last_i = 0
@@ -304,13 +303,11 @@ def get_slices(dims):
     return slices
 
 # Train and eval steps
-#@jax.jit
 @partial(np.vectorize, signature="(c),()->()")
 def cross_entropy_loss(logits, label):
     one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[-1])
     return -np.sum(one_hot_label * logits)
     #return -np.sum(label * logits)
-
 
 @partial(np.vectorize, signature="(c),()->()")
 def compute_accuracy(logits, label):
@@ -405,8 +402,8 @@ def _prep_batch_par(
     else:
         full_inputs = (inputs.astype(np.float32), )
 
-    #return full_inputs, np.squeeze(targets.astype(float)), integration_timesteps
-    return full_inputs, targets.astype(np.float32), integration_timesteps
+    # CAVE: squeeze very important for training!
+    return full_inputs, np.squeeze(targets.astype(np.float32)), integration_timesteps
 
 @partial(jax.jit, static_argnums=(0,), backend='gpu')# backend='cpu')
 def device_reshape(
@@ -486,57 +483,6 @@ def train_epoch(
     # Return average loss over batches
     return state, np.mean(np.array(batch_losses)), step
 
-
-# # NOTE: jitting pmapped function may cause inefficient data movement between devices
-# # @partial(
-# #     jax.jit,
-# #     backend='gpu',
-# #     static_argnums=(5,))
-# def train_step_OLD(
-#         state,
-#         rng,
-#         batch_inputs,
-#         batch_labels,
-#         batch_integration_timesteps,
-#         #model,
-#         batchnorm,
-#         #num_devices,
-#     ):
-#     """ Performs a single training step given a batch of data
-#         NOTE: batch_inputs is a tuple of (batched_message_inputs, batched_book_inputs)
-#               or only (batched_message_inputs,) if book inputs are not used.
-#     """
-#     #print(batch_inputs[1][0, 0, -1])
-
-#     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
-#     #print('tracing train_step')
-#     #loss, mod_vars, grads = par_loss_and_grad(
-#     #jax.tree_map(lambda x: print(x.shape), state)
-#     state, loss = par_loss_and_grad(
-#         # state.params,
-#         # state.apply_fn,
-#         # state.batch_stats,
-#         state,
-#         rng,
-#         batch_inputs,
-#         batch_labels,
-#         batch_integration_timesteps,
-#         batchnorm
-#     )
-
-#     # # calculate means over device dimension (first)
-#     # loss = loss.mean()
-#     # mod_vars = jax.tree_map(lambda x: x.mean(axis=0), mod_vars)
-#     # grads = jax.tree_map(lambda x: x.mean(axis=0), grads)
-
-#     # if batchnorm:
-#     #     state = state.apply_gradients(grads=grads, batch_stats=mod_vars["batch_stats"])
-#     # else:
-#     #     state = state.apply_gradients(grads=grads)
-
-#     #state, loss = update_step(loss, state, grads, mod_vars, batchnorm)
-#     return state, loss
-
 @partial(
     jax.pmap, backend='gpu',
     #jax.vmap,
@@ -559,21 +505,6 @@ def train_step(
     ):
     #print('tracing par_loss_and_grad')
     def loss_fn(params):
-
-        # print('in loss_fn')
-        # print('params["message_encoder"]["encoder"]["kernel"].shape', 
-        #       params["message_encoder"]["encoder"]["kernel"].shape)
-        # print('batch_inputs[0].shape', batch_inputs[0].shape)
-        # print('batch_integration_timesteps[0].shape', batch_integration_timesteps[0].shape)
-        # print('batch_labels.shape', batch_labels.shape)
-        # print('msg', batch_inputs[0])
-        # print('book', batch_inputs[1])
-        # print('timesteps msg', batch_integration_timesteps[0])
-        # print('timesteps book', batch_integration_timesteps[1])
-        # print('param shapes:')
-        # jax.tree_map(lambda x: print(x.shape), params)
-        # print()
-
         if batchnorm:
             # print(state.batch_stats)
             # print()
