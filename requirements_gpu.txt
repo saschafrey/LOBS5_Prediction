@@ -1,5 +1,5 @@
 jax[cuda]==0.4.2 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-jaxlib==0.4.2+cuda11.cudnn86 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jaxlib[cuda]==0.4.2 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 chex==0.1.5
 auto_mix_prep==0.2.0
 datasets==2.12.0
