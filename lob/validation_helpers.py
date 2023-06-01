@@ -398,7 +398,7 @@ def find_all_msg_occurances(
     if comp_cols is not None:
         # filter down to specific columns
         seq = seq[:, comp_cols]
-        msg = msg[comp_cols]
+        msg = msg[comp_cols,]
     return np.argwhere((seq == msg).all(axis=1))
 
 def find_all_msg_occurances_raw(
@@ -433,18 +433,19 @@ def try_find_msg(
     # perfect match
     matches = find_all_msg_occurances(msg, seq)
     if len(matches) > 0:
-        print('found perfect order match')
-        return int(matches.flatten()[0]), n_removed
+        idx = int(matches.flatten()[0])
+        print('found perfect order match', idx)
+        return idx, n_removed
     print('no perfect match found')
 
     seq = seq.at[seq_mask, :].set(-1)
     # iteratively remove fields used for matching
-    comp_cols = list(range(len(msg)))
+    comp_cols = tuple(range(len(msg)))
     remove_order = ['time', 'size', 'price']
     for col in remove_order:
         n_removed += 1
         remove_idx = list(range(*get_idx_from_field(col)))
-        comp_cols = [c for c in comp_cols if c not in remove_idx]
+        comp_cols = tuple(c for c in comp_cols if c not in remove_idx)
 
         # remove time from matching criteria
         matches = find_all_msg_occurances(msg, seq, comp_cols)

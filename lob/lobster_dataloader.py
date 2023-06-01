@@ -627,16 +627,15 @@ class LOBSTER(SequenceDataset):
             self.val_book_files = None
             self.test_book_files = None
 
-        # for now, just select (10% of) days randomly for validation
+        # for now, just select (e.g. 10% of) days randomly for validation
         self.val_files = [
             self.train_files.pop(
                 self.rng.randrange(0, len(self.train_files))
-            ) for _ in range(int(np.ceil(self.val_split)))]
+            ) for _ in range(int(np.ceil(self.val_split * len(message_files))))]
         if book_files:
             self.train_files, self.train_book_files = zip(*self.train_files)
             self.val_files, self.val_book_files = zip(*self.val_files)
 
-        # TODO: make n_cache_files a parameter
         #n_cache_files = 0
         self.dataset_train = LOBSTER_Dataset(
             self.train_files,
@@ -685,10 +684,6 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
         )
-
-        # TODO: remove
-        # decrease test size for now to run faster:
-        #self.dataset_test = LOBSTER_Subset(self.dataset_test, range(int(0.1 * len(self.dataset_test))))
 
     def reset_train_offsets(self):
         """ reset the train dataset to a new random offset
