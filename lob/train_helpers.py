@@ -381,7 +381,7 @@ def _prep_batch_par(
     """
     #print('tracing _prep_batch_par')
 
-    assert inputs.shape[1] == seq_len
+    assert inputs.shape[1] == seq_len, f'inputs: {inputs.shape} seq_len {seq_len}'
     inputs = one_hot(inputs, in_dim)
 
     # If there is an aux channel containing the integration times, then add that.

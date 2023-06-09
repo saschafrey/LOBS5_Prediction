@@ -23,6 +23,11 @@ import gymnax_exchange.jaxob.JaxOrderbook as job
 from gym_exchange.environment.base_env.assets.orderflow import OrderIdGenerator
 
 
+# time tokens aren't generated but calculated using delta_t
+# hence, skip generation from TIME_START_I (inclusive) to TIME_END_I (exclusive)
+TIME_START_I, TIME_END_I = valh.get_idx_from_field('time')
+
+
 def init_msgs_from_l2(book: Union[pd.Series, onp.ndarray]) -> jnp.ndarray:
     """"""
     orderbookLevels = len(book) // 4  # price/quantity for bid/ask
@@ -102,30 +107,51 @@ def get_sim_msg(
     pred_msg = tok.decode(pred_msg_enc, v).flatten()
     #print('decoded predicted message:', pred_msg)
 
-    if onp.isnan(pred_msg).all():
+    new_part = pred_msg[: Message_Tokenizer.N_NEW_FIELDS]
+    ref_part = pred_msg[Message_Tokenizer.N_NEW_FIELDS: ]
+
+    if onp.isnan(new_part).any():
+        print('new_part contains NaNs', new_part)
         return None, None, None
-    
-    orig_part = pred_msg[: len(pred_msg) // 2]
-    modif_part = pred_msg[len(pred_msg) // 2:]
+
+    event_type = int(pred_msg[Message_Tokenizer.FIELD_I['event_type']])
+    quantity = int(pred_msg[Message_Tokenizer.FIELD_I['size']])
+    side = int(pred_msg[Message_Tokenizer.FIELD_I['direction']])
+    rel_price = int(pred_msg[Message_Tokenizer.FIELD_I['price']])
+    delta_t = int(pred_msg[Message_Tokenizer.FIELD_I['delta_t']])
+    time = int(pred_msg[Message_Tokenizer.FIELD_I['time']])
 
     # new order: no modification values present (all NA)
     # should be new LIMIT ORDER (1)
-    if onp.isnan(modif_part).all():
-        order_dict, msg_corr, raw_dict = get_sim_msg_new(sim, orig_part, new_order_id, tick_size)
+    #if onp.isnan(ref_part).all():
+
+    # NEW LIMIT ORDER
+    if event_type == 1:
+        order_dict, msg_corr, raw_dict = get_sim_msg_new(
+            sim,
+            event_type, quantity, side, rel_price, delta_t, time,
+            new_order_id,
+            tick_size
+        )
 
     # modification / deletion / execution of existing order
     else:
         # error in msg: some modifier field is nan
-        if onp.isnan(modif_part).any():
+        if onp.isnan(ref_part).any():
+            print('ref_part has nan', ref_part)
             return None, None, None
+        
+        # resolve ref fields
+        rel_price_ref = int(pred_msg[Message_Tokenizer.FIELD_I['price_ref']])
+        quantity_ref = int(pred_msg[Message_Tokenizer.FIELD_I['size_ref']])
+        time_ref = int(pred_msg[Message_Tokenizer.FIELD_I['time_ref']])
 
-        mod_type = int(modif_part[1])
         # cancel / delete
-        if mod_type in {2, 3}:
+        if event_type in {2, 3}:
             order_dict, msg_corr, raw_dict = get_sim_msg_mod(
                 pred_msg_enc,
-                orig_part,
-                modif_part,
+                event_type, quantity, side, rel_price, delta_t, time,
+                rel_price_ref, quantity_ref, time_ref,
                 m_seq,
                 m_seq_raw,
                 sim,
@@ -134,11 +160,11 @@ def get_sim_msg(
                 tick_size)
 
         # modify
-        elif mod_type == 4:
+        elif event_type == 4:
             order_dict, msg_corr, raw_dict = get_sim_msg_exec(
                 pred_msg_enc,
-                orig_part,
-                modif_part,
+                event_type, quantity, side, rel_price, delta_t, time,
+                rel_price_ref, quantity_ref, time_ref,
                 m_seq,
                 m_seq_raw,
                 new_order_id,
@@ -156,44 +182,34 @@ def get_sim_msg(
 
 def get_sim_msg_new(
         sim: OrderBook,
-        orig_part: onp.ndarray,
+        #new_part: onp.ndarray,
+        event_type: int,
+        quantity: int,
+        side: int,
+        rel_price: int,
+        delta_t: int,
+        time: int,
         new_order_id: int,
         tick_size: int,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[onp.ndarray], Optional[Dict[str, Any]]]:
-
-        event_type = int(orig_part[1])
-        quantity = int(orig_part[2])
-        side = int(orig_part[4])
-
-        if onp.isnan(orig_part).any():
-            return None, None, None
         
-        assert event_type == 1
+        # if onp.isnan(new_part).any():
+        #     return None, None, None
+
+        # event_type = int(new_part[Message_Tokenizer.FIELDS.index('event_type')])
+        # quantity = int(new_part[Message_Tokenizer.FIELDS.index('size')])
+        # side = int(new_part[Message_Tokenizer.FIELDS.index('direction')])
+        # rel_price = int(new_part[Message_Tokenizer.FIELDS.index('price')])
+        # time = int(new_part[Message_Tokenizer.FIELDS.index('time')])
+
+        assert event_type == 1, 'Invalid event type for new order: ' + str(event_type)
         # new limit order
-        # if event_type == 1:
         print('NEW LIMIT ORDER')
-        rel_price = int(orig_part[3])
         # convert relative to absolute price
         price = sim.get_best_bid() + rel_price * tick_size
-            
-        # type 4: order execution
-        # else:
-        #     print('ORDER EXECUTION')
-        #     # make sure execution happens at best bid/ask
-        #     # adjust price and quantity (down) accordingly to guarantee execution at only one price level
-        #     #price = sim.get_best_ask() if side == 0 else sim.get_best_bid()
-        #     if side == 0:
-        #         price = sim.get_best_ask()
-        #         rel_price = (price - sim.get_best_bid()) // tick_size
-        #     else:
-        #         price = sim.get_best_bid()
-        #         rel_price = 0
-        #     available_qty = sim.get_volume_at_price(side, price)
-        #     quantity = min(quantity, available_qty)
 
-        # TODO: validate timestamp (should be in the future but not too far)
         order_dict = {
-            'timestamp': str(orig_part[0] * 1e-9 + 9.5 * 3600),
+            'timestamp': str(time * 1e-9 + 9.5 * 3600),
             'type': 'limit',
             'order_id': new_order_id, 
             'quantity': quantity,
@@ -205,19 +221,27 @@ def get_sim_msg_new(
         # msg format to update raw data
         raw_dict = sim_order_to_raw(order_dict, event_type)
 
+        # msg_corr = onp.array([
+        #     str(int(time)).zfill(15),
+        #     str(event_type),
+        #     str(quantity).zfill(4), 
+        #     ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
+        #     str(side),
+        # ])
         msg_corr = onp.array([
-            str(int(orig_part[0])).zfill(15),
             str(event_type),
-            str(quantity).zfill(4), 
-            ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
             str(side),
+            ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
+            str(quantity).zfill(4), 
+            str(int(delta_t)).zfill(12),
+            str(int(time)).zfill(15),
         ])
         # encode corrected message
         # TODO: make this an arg?
         tok = Message_Tokenizer()
         v = Vocab()
         msg_corr = tok.encode_msg(msg_corr, v)
-        nan_part = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+        nan_part = onp.array((Message_Tokenizer.MSG_LEN - Message_Tokenizer.NEW_MSG_LEN) * [Vocab.NA_TOK])
         msg_corr = onp.concatenate([msg_corr, nan_part])
 
         return order_dict, msg_corr, raw_dict
@@ -235,11 +259,54 @@ def rel_to_abs_price(
     return p_ref + p_rel * tick_size
 
 
+def construct_orig_msg_enc(
+        pred_msg_enc: jnp.ndarray,
+        v: Vocab,
+    ):
+    """ Reconstructs encoded original message WITHOUT Delta t
+        from encoded message string --> delta_t field is filled with NA_TOK
+    """
+    return jnp.concatenate([
+        jnp.array([v.ENCODING['event_type']['1']]),
+        pred_msg_enc[slice(*valh.get_idx_from_field('direction'))],
+        pred_msg_enc[slice(*valh.get_idx_from_field('price_ref'))],
+        pred_msg_enc[slice(*valh.get_idx_from_field('size_ref'))],
+        # NOTE: no delta_t here
+        jnp.full(
+            Message_Tokenizer.TOK_LENS[Message_Tokenizer.FIELD_I['delta_t']],
+            Vocab.NA_TOK
+        ),
+        pred_msg_enc[slice(*valh.get_idx_from_field('time_ref'))],
+    ])
+
+def convert_msg_to_ref(
+        pred_msg_enc: jnp.ndarray,
+    ):
+    """ Converts encoded message to reference message part,
+        i.e. (price, size, time) tokens
+    """
+    return jnp.concatenate([
+        pred_msg_enc[slice(*valh.get_idx_from_field('price'))],
+        pred_msg_enc[slice(*valh.get_idx_from_field('size'))],
+        pred_msg_enc[slice(*valh.get_idx_from_field('time'))],
+    ])
+
 def get_sim_msg_mod(
-        pred_msg_enc: onp.ndarray,
-        orig_part: onp.ndarray,
-        modif_part: onp.ndarray,
-        m_seq: onp.ndarray,
+        pred_msg_enc: jnp.ndarray,
+        #new_part: onp.ndarray,
+        #ref_part: onp.ndarray,
+        event_type: int,
+        removed_quantity: int,
+        side: int,
+        rel_price: int,
+        delta_t: int,
+        time: int,
+
+        rel_price_ref: int,
+        quantity_ref: int,
+        time_ref: int,
+
+        m_seq: jnp.ndarray,
         m_seq_raw: pd.DataFrame,
         sim: OrderBook,
         tok: Message_Tokenizer,
@@ -248,43 +315,39 @@ def get_sim_msg_mod(
     ) -> Tuple[Optional[Dict[str, Any]], Optional[onp.ndarray], Optional[Dict[str, Any]]]:
 
     print('ORDER CANCEL / DELETE')
+    REF_LEN = Message_Tokenizer.MSG_LEN - Message_Tokenizer.NEW_MSG_LEN
 
     # the actual price of the order to be modified
     # p_mod_raw = sim.get_best_bid() + int(modif_part[3]) * tick_size
-    p_mod_raw = rel_to_abs_price(int(modif_part[3]), sim, tick_size)
-    side = int(modif_part[4])
-    removed_quantity = int(modif_part[2])
-    event_type = int(modif_part[1])
+    p_mod_raw = rel_to_abs_price(rel_price, sim, tick_size)
 
-    print('rel price', int(modif_part[3]))
+    print('rel price', rel_price)
     print('side', side)
     print('removed_quantity (raw)', removed_quantity)
     print('total liquidity at price', sim.get_volume_at_price(side, p_mod_raw))
     print('event_type:', event_type)
 
     assert event_type != 4, 'event_type 4 should be handled separately'
-
-    # # make sure execution happens only if price generated at best bid/ask
-    # if event_type == 4:
-    #     best_price = sim.get_best_ask() if side == 0 else sim.get_best_bid()
-    #     if p_mod_raw != best_price:
-    #         print('EXECUTION AT WRONG PRICE')
-    #         return None, None
     
     # orig order before sequence start (no ref given or part missing)
-    if onp.isnan(orig_part).any():
+    if onp.isnan(rel_price_ref) or onp.isnan(quantity_ref) or onp.isnan(time_ref):
+        print('NaN ref value found')
+        print('rel_price_ref', rel_price_ref, 'quantity_ref', quantity_ref, 'time_ref', time_ref)
         # if no init volume remains at price, discard current message
         if sim.get_init_volume_at_price(side, p_mod_raw) == 0:
             return None, None, None
         order_id = job.INITID
-        orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+        #orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+        orig_msg_found = onp.array(REF_LEN * [Vocab.NA_TOK])
     
     # search for original order to get correct ID
     else:
         m_seq = m_seq.copy().reshape((-1, Message_Tokenizer.MSG_LEN))
-        # original part is only needed to match to an order ID
+        # ref part is only needed to match to an order ID
         # find original msg index location in the sequence (if it exists)
-        orig_enc = pred_msg_enc[: len(pred_msg_enc) // 2]
+        #orig_enc = pred_msg_enc[: len(pred_msg_enc) // 2]
+        orig_enc = construct_orig_msg_enc(pred_msg_enc, v)
+        print('orig_enc', orig_enc)
 
         mask = get_invalid_ref_mask(m_seq_raw, p_mod_raw, sim)
         orig_i, n_fields_removed = valh.try_find_msg(orig_enc, m_seq, seq_mask=mask)
@@ -295,13 +358,20 @@ def get_sim_msg_mod(
             if sim.get_init_volume_at_price(side, p_mod_raw) == 0:
                 return None, None, None
             order_id = job.INITID
-            orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+            orig_msg_found = onp.array(REF_LEN * [Vocab.NA_TOK])
         
         # found matching original message
         else:
             # get order ID from raw data for simulator
             order_id = int(m_seq_raw.iloc[orig_i].order_id)
-            orig_msg_found = onp.array(m_seq[orig_i, : Message_Tokenizer.MSG_LEN // 2])
+            # found original message: convert to ref part
+            if m_seq_raw.iloc[orig_i].event_type == 1:
+                # orig_msg_found = onp.array(m_seq[orig_i, -REF_LEN: ])
+                orig_msg_found = convert_msg_to_ref(m_seq[orig_i])
+            # found reference to original message
+            else:
+                # take ref fields from matching message
+                orig_msg_found = onp.array(m_seq[orig_i, -REF_LEN: ])
 
     # get remaining quantity in book for given order ID
     print('looking for order', order_id, 'at price', p_mod_raw)
@@ -319,7 +389,7 @@ def get_sim_msg_mod(
         if remaining_quantity == 0:
             return None, None, None
         order_id = job.INITID
-        orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+        orig_msg_found = onp.array(REF_LEN * [Vocab.NA_TOK])
 
     # removing more than remaining quantity --> scale down to remaining
     if removed_quantity >= remaining_quantity:
@@ -340,16 +410,12 @@ def get_sim_msg_mod(
     elif event_type == 3:
         sim_type = 'delete'
         sim_side = side
-    # elif event_type == 4:
-    #     sim_type = 'limit'
-    #     # convert execution side to limit order side for simulator
-    #     sim_side = 0 if side == 1 else 1
     else:
         raise ValueError('Invalid event type')
     
     order_dict = {
         # format decimals to nanosecond precision
-        'timestamp': format(modif_part[0] * 1e-9 + 9.5 * 3600, '.9f'),
+        'timestamp': format(time * 1e-9 + 9.5 * 3600, '.9f'),
         'type': sim_type,
         'order_id': order_id, 
         'quantity': removed_quantity,
@@ -357,29 +423,38 @@ def get_sim_msg_mod(
         'side': 'ask' if sim_side == 0 else 'bid',  # TODO: should be 'buy' or 'sell'
         'trade_id': 0  # should be trader_id in future
     }
-    # msg format to update raw data
+    # msg format to update raw data sequence
     raw_dict = sim_order_to_raw(order_dict, event_type)
-    rel_price = int(modif_part[3])
-    #corr_msg = onp.empty((len(pred_msg),))
-    #corr_msg[: len(pred_msg) // 2] = orig_msg_found
     msg_corr = onp.array([
-        str(int(modif_part[0])).zfill(15),
         str(event_type),
-        str(removed_quantity).zfill(4), 
-        ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
         str(side),
+        ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
+        str(removed_quantity).zfill(4), 
+        str(int(delta_t)).zfill(12),
+        str(int(time)).zfill(15),
     ])
     # encode corrected message
     msg_corr = tok.encode_msg(msg_corr, v)
-    msg_corr = onp.concatenate([orig_msg_found, msg_corr])
+    msg_corr = onp.concatenate([msg_corr, orig_msg_found])
 
     return order_dict, msg_corr, raw_dict
 
 
 def get_sim_msg_exec(
-        pred_msg_enc: onp.ndarray,
-        orig_part: onp.ndarray,
-        modif_part: onp.ndarray,
+        pred_msg_enc: jnp.ndarray,
+        #new_part: onp.ndarray,
+        #ref_part: onp.ndarray,
+        event_type: int,
+        removed_quantity: int,
+        side: int,
+        rel_price: int,
+        delta_t: int,
+        time: int,
+
+        rel_price_ref: int,
+        quantity_ref: int,
+        time_ref: int,
+        
         m_seq: onp.ndarray,
         m_seq_raw: pd.DataFrame,
         new_order_id: int,
@@ -390,12 +465,10 @@ def get_sim_msg_exec(
     ) -> Tuple[Optional[Dict[str, Any]], Optional[onp.ndarray], Optional[Dict[str, Any]]]:
 
     print('ORDER EXECUTION')
+    REF_LEN = Message_Tokenizer.MSG_LEN - Message_Tokenizer.NEW_MSG_LEN
 
     # the actual price of the order to be modified
-    p_mod_raw = rel_to_abs_price(int(modif_part[3]), sim, tick_size)
-    side = int(modif_part[4])
-    removed_quantity = int(modif_part[2])
-    event_type = int(modif_part[1])
+    p_mod_raw = rel_to_abs_price(rel_price, sim, tick_size)
 
     print('event_type:', event_type)
     assert event_type == 4
@@ -429,7 +502,7 @@ def get_sim_msg_exec(
     
     order_dict = {
         # format decimals to nanosecond precision
-        'timestamp': format(modif_part[0] * 1e-9 + 9.5 * 3600, '.9f'),
+        'timestamp': format(time * 1e-9 + 9.5 * 3600, '.9f'),
         'type': 'limit',
         'order_id': new_order_id, 
         'quantity': removed_quantity,
@@ -440,13 +513,20 @@ def get_sim_msg_exec(
     
     # msg format to update raw data, CAVE: execution is opposite side from limit order
     raw_dict = sim_order_to_raw({**order_dict, 'side': 'ask' if side == 0 else 'bid'}, event_type)
-    rel_price = int(modif_part[3])
+    # msg_corr = onp.array([
+    #     str(time).zfill(15),
+    #     str(event_type),
+    #     str(removed_quantity).zfill(4), 
+    #     ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
+    #     str(side),
+    # ])
     msg_corr = onp.array([
-        str(int(modif_part[0])).zfill(15),
         str(event_type),
-        str(removed_quantity).zfill(4), 
-        ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
         str(side),
+        ('+' if rel_price > 0 else '-') + str(onp.abs(rel_price)).zfill(2),
+        str(removed_quantity).zfill(4), 
+        str(int(delta_t)).zfill(12),
+        str(int(time)).zfill(15),
     ])
 
     # correct the order which is executed in the sequence
@@ -458,14 +538,23 @@ def get_sim_msg_exec(
         #print('orig_i', orig_i)
         #print('m_seq[orig_i]', m_seq[orig_i])
         orig_i = orig_i.flatten()[0]
-        orig_msg_found = onp.array(m_seq[orig_i, : Message_Tokenizer.MSG_LEN // 2])
+
+        # found original message: convert to ref part
+        if m_seq_raw.iloc[orig_i].event_type == 1:
+            # orig_msg_found = onp.array(m_seq[orig_i, -REF_LEN: ])
+            orig_msg_found = convert_msg_to_ref(m_seq[orig_i])
+        # found reference to original message
+        else:
+            # take ref fields from matching message
+            orig_msg_found = onp.array(m_seq[orig_i, -REF_LEN: ])
+
     # didn't find correct order (e.g. INITID)
     else:
-        orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
+        orig_msg_found = onp.array(REF_LEN * [Vocab.NA_TOK])
 
     # encode corrected message
     msg_corr = tok.encode_msg(msg_corr, v)
-    msg_corr = onp.concatenate([orig_msg_found, msg_corr])
+    msg_corr = onp.concatenate([msg_corr, orig_msg_found])
 
     return order_dict, msg_corr, raw_dict
 
@@ -475,7 +564,8 @@ def get_invalid_ref_mask(
         p_mod_raw: int,
         sim: OrderBook
     ):
-
+    """
+    """
     # filter sequence to prices matching the correct price level
     wrong_price_mask = (m_seq_raw.price != p_mod_raw).astype(bool).values
     # to filter to orders still in the book: get order IDs from sim
@@ -489,12 +579,12 @@ def get_invalid_ref_mask(
 
 def sim_order_to_raw(order_dict: Dict[str, Any], event_type: int):
     return {
-        'time': order_dict['timestamp'],
-        'event_type': event_type,
-        'order_id': order_dict['order_id'],
-        'size': order_dict['quantity'],
-        'price': order_dict['price'],
-        'direction': order_dict['side'],
+        'time': float(order_dict['timestamp']),
+        'event_type': int(event_type),
+        'order_id': int(order_dict['order_id']),
+        'size': int(order_dict['quantity']),
+        'price': (order_dict['price']),
+        'direction': (order_dict['side']),
     }
 
 
@@ -514,6 +604,7 @@ def generate(
 
     id_gen = OrderIdGenerator()
     l = Message_Tokenizer.MSG_LEN
+    last_start_i = m_seq.shape[0] - l
     v = Vocab()
     tok = Message_Tokenizer()
     vocab_len = len(v)
@@ -521,12 +612,41 @@ def generate(
     l2_book_states = []
     m_seq_raw = m_seq_raw.copy()
 
+    time_start_i, time_end_i = valh.get_idx_from_field('time')
+    delta_t_start_i, delta_t_end_i = valh.get_idx_from_field('delta_t')
+
     while n_msg_todo > 0:
         rng, rng_ = jax.random.split(rng)
+        
+        time_init = tok.decode_toks(onp.array(m_seq[last_start_i + time_start_i: last_start_i + time_end_i]), v)
+        # roll sequence one step forward
         m_seq = valh.append_hid_msg(m_seq)
 
+        # TODO: calculating time in case where generation is not seqeuentially left to right
+        #       --> check if delta_t complete --> calc time once
+
+        #time_init = m_seq_raw.time.values[-1]
+        
         # get next message: generate l tokens
         for mask_i in range(l):
+            # calculate time once from previous time and delta_t
+            if mask_i == TIME_START_I:
+                delta_t_toks = m_seq[last_start_i + delta_t_start_i: last_start_i + delta_t_end_i]
+                print('delta_t_toks', delta_t_toks)
+                dec = v.DECODING['time']
+                delta_t = int(''.join([dec[t] for t in onp.array(delta_t_toks)]))
+                print('delta_t', delta_t)
+                time = time_init + delta_t
+                print('time', time)
+                
+                # encode time and add to sequence
+                time_toks = tok.encode_field(str(time).zfill(15), 'time', v)
+                print('time_toks', time_toks)
+                m_seq = m_seq.at[last_start_i + time_start_i: last_start_i + time_end_i].set(time_toks)
+            # skip generation of time tokens
+            if (mask_i >= TIME_START_I) and (mask_i < TIME_END_I):
+                continue
+
             # syntactically valid tokens for current message position
             valid_mask = valid_mask_array[mask_i]
 
@@ -554,6 +674,9 @@ def generate(
             rng, rng_ = jax.random.split(rng)
             m_seq = valh.fill_predicted_toks(m_seq, logits, sample_top_n, jnp.array([rng_]))
 
+        print(m_seq[-l:])
+        print('decoded:')
+        print(tok.decode(m_seq[-l:], v))
         ### process generated message
 
         #m_seq_raw = m.iloc[end_i - n_messages : end_i]
@@ -590,7 +713,12 @@ def generate(
         #print('after', msg_corr)
         m_seq = m_seq.at[-l:].set(msg_corr)
         # append new message to raw data
-        m_seq_raw = m_seq_raw.iloc[1:].append(msg_raw, ignore_index=True)
+        #m_seq_raw = m_seq_raw.iloc[1:].append(msg_raw, ignore_index=True)
+        m_seq_raw = pd.concat([
+                m_seq_raw.iloc[1:],
+                pd.DataFrame([msg_raw])
+            ],
+            ignore_index=True)
         print('len(m_seq_raw)', len(m_seq_raw))
         print('new raw msg', m_seq_raw.iloc[-1])
 

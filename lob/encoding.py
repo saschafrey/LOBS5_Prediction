@@ -57,34 +57,63 @@ class Vocab:
 
 class Message_Tokenizer:
 
+    # FIELDS = (
+    #     'time',
+    #     'delta_t',
+    #     'event_type',
+    #     'size',
+    #     'price',
+    #     'direction',
+    #     'time_new',
+    #     'delta_t_new',
+    #     'event_type_new',
+    #     'size_new',
+    #     'price_new',
+    #     'direction_new'
+    # )
     FIELDS = (
-        'time',
         'event_type',
-        'size',
-        'price',
         'direction',
-        'time_new',
-        'event_type_new',
-        'size_new',
-        'price_new',
-        'direction_new'
+        'price',
+        'size',
+        'delta_t',
+        'time',
+        # reference fields:
+        'price_ref',
+        'size_ref',
+        'time_ref',
     )
-    #FIELD_LENS = np.array((15, 1, 4, 3, 1, 15, 1, 4, 3, 1))
-    TOK_LENS = np.array((5, 1, 1, 2, 1, 5, 1, 1, 2, 1))
+    N_NEW_FIELDS = 6
+    N_REF_FIELDS = 3
+    # note: list comps only work inside function for class variables
+    FIELD_I = (lambda fields=FIELDS:{
+        f: i for i, f in enumerate(fields)
+    })()
+    #TOK_LENS = np.array((5, 4, 1, 1, 2, 1, 5, 4, 1, 1, 2, 1))
+    TOK_LENS = np.array((1, 1, 2, 1, 4, 5, 2, 1, 5))
     TOK_DELIM = np.cumsum(TOK_LENS[:-1])
     #FIELD_DELIM = np.cumsum(FIELD_LENS[:-1])
-    MSG_LEN = np.sum(TOK_LENS)  #np.sum(FIELD_LENS)
+    MSG_LEN = np.sum(TOK_LENS)
+    # encoded message length: total length - length of reference fields
+    NEW_MSG_LEN = MSG_LEN - \
+        (lambda tl=TOK_LENS, fields=FIELDS: np.sum(tl[i] for i, f in enumerate(fields) if f.endswith('_ref')))()
+    # fields in correct message order:
     FIELD_ENC_TYPES = {
-        'time': 'time', #'generic',
         'event_type': 'event_type',
-        'size': 'size', #'generic',
-        'price': 'price', #'generic',
         'direction': 'direction',
-        'time_new': 'time', #'generic',
-        'event_type_new': 'event_type',
-        'size_new': 'size', #'generic',
-        'price_new': 'price', #'generic',
-        'direction_new': 'direction',
+        'price': 'price', #'generic',
+        'size': 'size', #'generic',
+        'delta_t': 'time', #'generic',
+        'time': 'time', #'generic',
+        # 'time_new': 'time', #'generic',
+        # 'delta_t_new': 'time', #'generic',
+        # 'event_type_new': 'event_type',
+        # 'size_new': 'size', #'generic',
+        # 'price_new': 'price', #'generic',
+        # 'direction_new': 'direction',
+        'price_ref': 'price',
+        'size_ref': 'size',
+        'time_ref': 'time',
     }
 
     @staticmethod
@@ -145,18 +174,27 @@ class Message_Tokenizer:
         m = m.sum(axis=1)
         # return as numpy array
         return np.array(m.to_list())
+    
+    def encode_field(self, num, field, vocab):
+        enc_type = Message_Tokenizer.FIELD_ENC_TYPES[field]
+        enc = vocab.ENCODING[enc_type]
+        n_toks = Message_Tokenizer.TOK_LENS[Message_Tokenizer.FIELD_I[field]]
+        delim_i = vocab.TOKEN_DELIM_IDX[enc_type]
+        return self._encode_field(num, enc, n_toks, delim_i)
+    
+    def _encode_field(self, num, enc, n_toks, delim_i=None):
+        if pd.isnull(num):
+            return [Vocab.NA_TOK] * n_toks
+        elif not isinstance(num, str):
+            num = str(int(num))
+        if delim_i is not None:
+            # split into tokenizable junks
+            num = [num[i:j] for i, j in zip([0] + delim_i, delim_i + [None]) if len(num[i:j]) > 0]
+        return [enc[d] for d in num]
+        #return num
 
     def _encode_col(self, col, enc, n_toks, delim_i=None):
-        def _encode_field(num):
-            if pd.isnull(num):
-                return [Vocab.NA_TOK] * n_toks
-            elif not isinstance(num, str):
-                num = str(int(num))
-            if delim_i is not None:
-                # split into tokenizable junks
-                num = [num[i:j] for i, j in zip([0] + delim_i, delim_i + [None])]
-            return [enc[d] for d in num]
-        return col.apply(_encode_field)
+        return col.apply(lambda x: self._encode_field(x, enc, n_toks, delim_i))
     
     def encode_msg(
             self,
@@ -177,9 +215,11 @@ class Message_Tokenizer:
         #     'trade_id': 0  # should be trader_id in future
         # }
 
-        cols = ['time', 'event_type', 'size', 'price', 'direction']
+        #cols = ['time', 'delta_t', 'event_type', 'size', 'price', 'direction']
+        enc_types = [self.FIELD_ENC_TYPES[f] for f in Message_Tokenizer.FIELDS if not f.endswith('_ref')]
+        assert len(enc_types) == len(msg), "Message must have {} fields. Not {}.".format(len(enc_types), len(msg))
         out = []
-        for field, x in zip(cols, msg):
+        for field, x in zip(enc_types, msg):
             # print(field, x)
             #enc_type = Message_Tokenizer.FIELD_ENC_TYPES[col]
             enc = vocab.ENCODING[field]
@@ -188,7 +228,7 @@ class Message_Tokenizer:
             if delim_i is not None:
                 # print('delim_i', delim_i)
                 # print(len(enc.keys()))
-                parts = [enc[x[i:j]] for i, j in zip([0] + delim_i, delim_i + [None])]
+                parts = [enc[x[i:j]] for i, j in zip([0] + delim_i, delim_i + [None]) if len(x[i:j]) > 0]
             else:
                 parts = [enc[x]]
             # print(parts)
@@ -196,6 +236,9 @@ class Message_Tokenizer:
             out.extend(parts)
         return np.array(out)
 
+    def decode_toks(self, toks, vocab):
+        return int(''.join([vocab.DECODING_GLOBAL[t][1] for t in toks]))
+    
     def decode(self, toks, vocab):
         toks = np.array(toks).reshape(-1, Message_Tokenizer.MSG_LEN)
         str_arr = self.decode_to_str(toks, vocab)
@@ -255,7 +298,7 @@ class Message_Tokenizer:
             return False, res, 'syntax error'
         valid_semant, err = self._validate_semantics(res)
         if not valid_semant:
-            return False, _, err
+            return False, None, err
 
     def _validate_syntax(self, toks, vocab):
         try:
@@ -287,7 +330,14 @@ class Message_Tokenizer:
         # subtract opening time and convert to ns integer
         opening_s = 9.5 * 3600  # NASDAQ opens 9:30
         #closing_s = 16 * 3600   # and closes at 16:00
-        m['time'] = (m['time'] - opening_s).multiply(1e9).round().astype(int).astype(str).str.zfill(15)
+        m['time'] = (m['time'] - opening_s).multiply(1e9).round().astype(int)
+        # DELTA_T: time since previous order --> 4 tokens of length 3
+        m.insert(
+            loc=1,
+            column='delta_t',
+            value=m['time'].diff().fillna(0).astype(int).round().astype(str).str.zfill(12)
+        )
+        m['time'] = m['time'].astype(str).str.zfill(15)
         
         # SIZE
         m.loc[m['size'] > 9999, 'size'] = 9999
@@ -298,8 +348,7 @@ class Message_Tokenizer:
         #bb = b.iloc[:, 2].shift()
         # rounded mid-price reference
         p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2).round(-2).astype(int).shift()
-        # --> 199 price levels
-        # --> 1999 price levels
+        # --> 1999 price levels // ...00 since tick size is 100
         m.price = self._preproc_prices(m.price, p_ref, p_lower_trunc=-99900, p_upper_trunc=99900)
         m = m.dropna()
         m.price = m.price.astype(int).apply(self._numeric_str)
@@ -307,7 +356,11 @@ class Message_Tokenizer:
         # DIRECTION
         m.direction = ((m.direction + 1) / 2).astype(int)
 
-        # add order changes as features
+        # change column order
+        m = m[['order_id', 'event_type', 'direction', 'price', 'size', 'delta_t', 'time']]
+
+        # add original message as feature 
+        # for all referential order types (2, 3, 4)
         m = self._add_orig_msg_features(m)
 
         return m
@@ -332,8 +385,35 @@ class Message_Tokenizer:
         p /= 100
         return p
 
-    def _add_orig_msg_features(self, m):
-        """ Changes representation of order cancellation (2) / deletion (3),
+    # def _add_orig_msg_features(self, m):
+    #     """ Changes representation of order cancellation (2) / deletion (3) / execution (4),
+    #         representing them as the original message and new columns containing
+    #         the order modification details.
+    #         This effectively does the lookup step in past data.
+    #         TODO: lookup missing original message data from previous days' data?
+    #     """
+
+    #     m_changes = pd.merge(
+    #         m.loc[m.event_type == 1],
+    #         m.loc[(m.event_type == 2) | (m.event_type == 3) | (m.event_type == 4)].reset_index(),
+    #         how='right', on='order_id', suffixes=['', '_new']).set_index('index')
+    #     #display(m_changes)
+
+    #     # add new empty columns for order modifications
+    #     m[m_changes.columns[m.shape[1]:].values] = np.nan
+    #     # replace order changes by original order and additional new fields
+    #     #display(m)
+    #     #display(m_changes)
+    #     m.loc[m_changes.index] = m_changes
+    #     return m
+
+    def _add_orig_msg_features(
+            self,
+            m,
+            modif_types={2,3,4},
+            modif_fields=['price', 'size', 'time']
+        ):
+        """ Changes representation of order cancellation (2) / deletion (3) / execution (4),
             representing them as the original message and new columns containing
             the order modification details.
             This effectively does the lookup step in past data.
@@ -341,19 +421,19 @@ class Message_Tokenizer:
         """
 
         m_changes = pd.merge(
-            m.loc[m.event_type == 1],
-            m.loc[(m.event_type == 2) | (m.event_type == 3) | (m.event_type == 4)].reset_index(),
-            how='right', on='order_id', suffixes=['', '_new']).set_index('index')
+            m.loc[m.event_type.isin(modif_types)].reset_index(),
+            m.loc[m.event_type == 1, ['order_id'] + modif_fields],
+            how='left', on='order_id', suffixes=['', '_ref']).set_index('index')
         #display(m_changes)
 
-        # add new empty columns for order modifications
-        m[m_changes.columns[-5:].values] = np.nan
+        # add new empty columns for referenced order
+        m[[field + '_ref' for field in modif_fields]] = np.nan
         # replace order changes by original order and additional new fields
         #display(m)
         #display(m_changes)
         m.loc[m_changes.index] = m_changes
         return m
-
+    
     def _numeric_str(self, num, pad=2):
         if num == 0:
             return '-00'

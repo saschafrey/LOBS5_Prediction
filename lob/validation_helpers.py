@@ -54,20 +54,16 @@ def syntax_validation_matrix(v = None):
     # e.g. +/- at start of price
     i, _ = get_idx_from_field("price")
     mask = update_allowed_tok_slice(mask, i, ['+', '-'])
-    i, _ = get_idx_from_field("price_new")
+    i, _ = get_idx_from_field("price_ref")
     mask = update_allowed_tok_slice(mask, i, ['+', '-'])
-    # only new messages and executions allowed in original message
-    # and only cancels or deletions in modified message
-    i, _ = get_idx_from_field("event_type")
-    mask = update_allowed_tok_slice(mask, i, ['1'])
-    i, _ = get_idx_from_field("event_type_new")
-    mask = update_allowed_tok_slice(mask, i, ['2', '3', '4'])
 
     # adjustments for special tokens (no MSK or HID) allowed
     # NA always allowed
     mask = mask.at[:, v.MASK_TOK].set(False)
     mask = mask.at[:, v.HIDDEN_TOK].set(False)
-    mask = mask.at[:, v.NA_TOK].set(True)
+    # allow NAN token in ref fields only
+    mask = mask.at[:, v.NA_TOK].set(False)
+    mask = mask.at[Message_Tokenizer.NEW_MSG_LEN: , v.NA_TOK].set(True)
 
     return mask
 
@@ -102,7 +98,8 @@ def get_field_from_idx(idx):
     return Message_Tokenizer.get_field_from_idx(idx)
 
 def get_idx_from_field(field):
-    field_i = onp.argwhere(onp.array(Message_Tokenizer.FIELDS) == field).flatten()[0]
+    #field_i = onp.argwhere(onp.array(Message_Tokenizer.FIELDS) == field).flatten()[0]
+    field_i = Message_Tokenizer.FIELD_I[field]
     return LOBSTER_Dataset._get_tok_slice_i(field_i)
 
 def get_masked_fields(inp_maybe_batched):
@@ -163,10 +160,10 @@ def pred_rank(pred, labels):
     """ Get the rank of the correct label in the predicted distribution.
         Lower is better (0 is correct prediction).
     """
-    correct_mask = nn.one_hot(labels.astype(int), pred.shape[-1]).astype(bool)
+    correct_mask = np.squeeze(nn.one_hot(labels.astype(int), pred.shape[-1]).astype(bool))
     # ::-1 sorts in descending order (0 is highest rank)
     a = pred.argsort(axis=-1)
-    ranks = a[..., ::-1].argsort(axis=-1)
+    ranks = np.squeeze(a[..., ::-1].argsort(axis=-1))
     return ranks[correct_mask]
 
 def fill_predicted_toks(seq, pred, top_n=1, rng=None):
@@ -385,7 +382,7 @@ def find_orig_msg(
 def find_all_msg_occurances(
         msg: jax.Array,
         seq: jax.Array,
-        comp_cols: Optional[Iterable[int]] = None,
+        comp_cols: Iterable[str],
     ) -> jax.Array:
     """ Finds ALL msg locations in given seq.
         NOTE: could also find earlier msg modifications,
@@ -393,13 +390,51 @@ def find_all_msg_occurances(
               but we know at least that the message is in the sequence.
         Returns index of first token of msg in seq and None if msg is not found
     """
+    assert msg.ndim == 1
     l = Message_Tokenizer.MSG_LEN
-    seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))[:, :l//2]
-    if comp_cols is not None:
-        # filter down to specific columns
-        seq = seq[:, comp_cols]
-        msg = msg[comp_cols,]
-    return np.argwhere((seq == msg).all(axis=1))
+    seq = seq.reshape((-1, Message_Tokenizer.MSG_LEN))#[:, : Message_Tokenizer.NEW_MSG_LEN]
+
+    # indices of columns to compare
+    comp_i = [idx for c in comp_cols for idx in list(range(*get_idx_from_field(c)))]
+
+    print("comp_cols", comp_cols)
+    print("comp_i", comp_i)
+    #print('seq', seq)
+    #print('msg', msg)
+
+    print('searching for (new)', msg[comp_i,])
+    print('in seq', seq[:, comp_i])
+
+    # filter down to specific columns
+    direct_matches = np.argwhere((seq[:, comp_i] == msg[comp_i,]).all(axis=1))
+    
+    if len(direct_matches.flatten()) > 0:
+        print('found direct matches')
+        return direct_matches
+
+    # also search in seq ref part (matching fields)
+    
+    comp_cols_ref = \
+        [c for c in comp_cols if (c + '_ref' in Message_Tokenizer.FIELDS)]
+    comp_i = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c)))]
+    comp_i_ref = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c + '_ref')))]
+    
+    if 'direction' in comp_cols:
+        comp_cols_ref += ['direction']  # direction field should be added to ref search
+        comp_i += list(range(*get_idx_from_field('direction')))
+        comp_i_ref += list(range(*get_idx_from_field('direction')))
+    
+    ref_matches = np.argwhere((seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1))
+
+    print("comp_cols_ref", comp_cols_ref)
+    print("comp_i_ref", comp_i_ref)
+
+    print('searching for (ref)', msg[comp_i,])
+    print('in seq', seq[:, comp_i_ref])
+
+    if len(ref_matches.flatten()) > 0:
+        print('found ref matches')
+    return ref_matches
 
 def find_all_msg_occurances_raw(
         msg: onp.ndarray,
@@ -421,7 +456,7 @@ def find_all_msg_occurances_raw(
 def try_find_msg(
         msg: jax.Array,
         seq: jax.Array,
-        seq_mask: jax.Array,
+        seq_mask: Optional[jax.Array] = None,
     ) -> Tuple[Optional[int], Optional[int]]:
     """ 
         Returns match index or None if no match is found; and number of fields removed in match
@@ -429,26 +464,24 @@ def try_find_msg(
         seq_mask: filters to messages with correctly matching price level 
                   CAVE: values of 1 in mask are set to -1 in seq if no perfect match is found
     """
+    if seq_mask is not None:
+        seq = seq.at[seq_mask, :].set(-1)
+
+    # remove fields from matching criteria
+    matching_cols = [
+        ('event_type', 'direction', 'price', 'size', 'time'),
+        ('event_type', 'direction', 'price', 'size'),
+        ('event_type', 'direction', 'price'),
+        ('event_type', 'direction'),
+    ]
     n_removed = 0
-    # perfect match
-    matches = find_all_msg_occurances(msg, seq)
-    if len(matches) > 0:
-        idx = int(matches.flatten()[0])
-        print('found perfect order match', idx)
-        return idx, n_removed
-    print('no perfect match found')
-
-    seq = seq.at[seq_mask, :].set(-1)
-    # iteratively remove fields used for matching
-    comp_cols = tuple(range(len(msg)))
-    remove_order = ['time', 'size', 'price']
-    for col in remove_order:
-        n_removed += 1
-        remove_idx = list(range(*get_idx_from_field(col)))
-        comp_cols = tuple(c for c in comp_cols if c not in remove_idx)
-
-        # remove time from matching criteria
+    for comp_cols in matching_cols:
+        # remove field from matching criteria
         matches = find_all_msg_occurances(msg, seq, comp_cols)
         if len(matches) > 0:
-            return int(matches.flatten()[0]), n_removed
+            idx = int(matches.flatten()[0])
+            print('found match after removing', n_removed, 'at idx', idx)
+            return idx, n_removed
+        n_removed += 1
+    print('no match found')
     return None, None
