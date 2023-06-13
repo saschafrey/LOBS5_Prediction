@@ -22,8 +22,8 @@ if __name__ == "__main__":
 	# no GPU use at all
 	#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-	#os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-	os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".8"
+	os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+	#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".8"
 
 	torch.multiprocessing.set_start_method('spawn')
 

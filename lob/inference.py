@@ -219,7 +219,7 @@ def get_sim_msg_new(
         }
 
         # msg format to update raw data
-        raw_dict = sim_order_to_raw(order_dict, event_type)
+        raw_dict = sim_order_to_raw({**order_dict, 'side': side}, event_type)
 
         # msg_corr = onp.array([
         #     str(int(time)).zfill(15),
@@ -424,7 +424,7 @@ def get_sim_msg_mod(
         'trade_id': 0  # should be trader_id in future
     }
     # msg format to update raw data sequence
-    raw_dict = sim_order_to_raw(order_dict, event_type)
+    raw_dict = sim_order_to_raw({**order_dict, 'side': side}, event_type)
     msg_corr = onp.array([
         str(event_type),
         str(side),
@@ -484,8 +484,9 @@ def get_sim_msg_exec(
         print('   execution on bid side (seller initiated)')
         print('   best bid:', passive_order[1])
     if p_mod_raw != passive_order[1]:
-        print('EXECUTION AT WRONG PRICE', 'gen:', p_mod_raw, 'p_passive', passive_order[1])
-        return None, None, None
+        print('EXECUTION AT WRONG PRICE', 'gen:', p_mod_raw, 'p_passive', passive_order[1], 'correcting...')
+        p_mod_raw = passive_order[1]
+        #return None, None, None
 
     remaining_quantity = passive_order[0]
     print('remaining quantity', remaining_quantity)
@@ -512,7 +513,7 @@ def get_sim_msg_exec(
     }
     
     # msg format to update raw data, CAVE: execution is opposite side from limit order
-    raw_dict = sim_order_to_raw({**order_dict, 'side': 'ask' if side == 0 else 'bid'}, event_type)
+    raw_dict = sim_order_to_raw({**order_dict, 'side': side}, event_type)
     # msg_corr = onp.array([
     #     str(time).zfill(15),
     #     str(event_type),
@@ -583,8 +584,9 @@ def sim_order_to_raw(order_dict: Dict[str, Any], event_type: int):
         'event_type': int(event_type),
         'order_id': int(order_dict['order_id']),
         'size': int(order_dict['quantity']),
-        'price': (order_dict['price']),
-        'direction': (order_dict['side']),
+        'price': int(order_dict['price']),
+        # convert from 0/1 to -1/1
+        'direction': int(order_dict['side']) * 2 - 1,
     }
 
 

@@ -426,11 +426,11 @@ def find_all_msg_occurances(
     
     ref_matches = np.argwhere((seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1))
 
-    print("comp_cols_ref", comp_cols_ref)
-    print("comp_i_ref", comp_i_ref)
+    # print("comp_cols_ref", comp_cols_ref)
+    # print("comp_i_ref", comp_i_ref)
 
-    print('searching for (ref)', msg[comp_i,])
-    print('in seq', seq[:, comp_i_ref])
+    # print('searching for (ref)', msg[comp_i,])
+    # print('in seq', seq[:, comp_i_ref])
 
     if len(ref_matches.flatten()) > 0:
         print('found ref matches')
@@ -472,7 +472,7 @@ def try_find_msg(
         ('event_type', 'direction', 'price', 'size', 'time'),
         ('event_type', 'direction', 'price', 'size'),
         ('event_type', 'direction', 'price'),
-        ('event_type', 'direction'),
+        #('event_type', 'direction'),
     ]
     n_removed = 0
     for comp_cols in matching_cols:

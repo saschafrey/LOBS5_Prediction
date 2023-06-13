@@ -87,20 +87,26 @@ class LOBSTER_Dataset(Dataset):
 
         # select random positions to HIDe
         l = Message_Tokenizer.MSG_LEN
-        # sample uniformly without replacement
-        hid_pos = sorted(
-            rng.choice(
-                list(range(l)),
-                rng.integers(1, l + 1),
-                replace=False
-            )
-        )
 
         # exclude time from masking if exclude_time == True
         if exclude_time:
-            time_field_i = Message_Tokenizer.FIELDS.index('time')
-            time_start, time_end = LOBSTER_Dataset._get_tok_slice_i(time_field_i)
-            hid_pos = [i for i in hid_pos if i < time_start or i >= time_end]
+            time_field_i = Message_Tokenizer.FIELD_I['time']
+            time_start_i, time_end_i = LOBSTER_Dataset._get_tok_slice_i(time_field_i)
+            candidate_pos = list(range(time_start_i)) + list(range(time_end_i, l))
+            max_hid = l + 1 - (time_end_i - time_start_i)
+        else:
+            candidate_pos = list(range(l))
+            max_hid = l + 1
+
+        # sample uniformly without replacement
+        hid_pos = sorted(
+            rng.choice(
+                #list(range(l)),
+                candidate_pos,
+                rng.integers(1, max_hid),
+                replace=False
+            )
+        )
 
         # select one position to MSK from pre-selected HID positions
         msk_pos = rng.choice(hid_pos)
@@ -113,7 +119,7 @@ class LOBSTER_Dataset(Dataset):
             # part of delta_t is hidden
             if any(i in hid_pos for i in dt_idx):
                 # --> also HIDe time
-                hid_pos.extend(range(time_start, time_end))
+                hid_pos.extend(range(time_start_i, time_end_i))
 
         y = seq[-1, msk_pos]
         seq[-1, msk_pos] = Vocab.MASK_TOK
@@ -393,13 +399,12 @@ class LOBSTER_Dataset(Dataset):
             # use raw price, volume series, rather than volume image
             # subtract initial price to start all sequences around 0
             if self.use_simple_book:
-                # normalize slighly (batch norm should do this better)
-                #book = book.copy().astype(np.float32) / 1000
-                # CAVE: first colum is Delta mid price
-                p_mid_0 = (book[0, 1] + book[0, 3]) / 2
-                book[:, 1::2] = (book[:, 1::2] - p_mid_0)
+                # CAVE: first column is Delta mid price
+                # p_mid_0 = (book[0, 1] + book[0, 3]) / 2
+                # book[:, 1::2] = (book[:, 1::2] - p_mid_0)
                 # divide volume by 100
                 #book[:, 2::2] = book[:, 2::2] / 100
+                pass
 
             ret_tuple = X, y, book
         else:
