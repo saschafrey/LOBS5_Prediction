@@ -4,11 +4,18 @@ import pandas as pd
 import jax
 from jax import nn
 from jax.random import PRNGKeyArray
+from jax.experimental import checkify
+import chex
 import flax
 from flax.training.train_state import TrainState
 import jax.numpy as np
 from functools import partial
 import numpy as onp
+
+import logging
+logger = logging.getLogger(__name__)
+debug = lambda *args: logger.debug(' '.join((str(arg) for arg in args)))
+info = lambda *args: logger.info(' '.join((str(arg) for arg in args)))
 
 from lob.lobster_dataloader import LOBSTER_Dataset
 
@@ -66,6 +73,14 @@ def syntax_validation_matrix(v = None):
     mask = mask.at[Message_Tokenizer.NEW_MSG_LEN: , v.NA_TOK].set(True)
 
     return mask
+
+@jax.jit
+def get_valid_mask(
+        valid_mask_array: jax.Array,
+        i: int
+    ) -> jax.Array:
+    return valid_mask_array[i]
+
 
 def update_allowed_tok_slice(mask, i, allowed_toks):
     field = get_field_from_idx(i)
@@ -144,7 +159,11 @@ def valid_prediction_mass(pred, fields, top_n=None):
 
     return (np.sum(np.exp(pred) * mask_valid, axis=1)) / top_n_mass
 
-def mask_n_highest(a, n):
+@jax.jit
+def mask_n_highest(
+        a: jax.Array,
+        n: jax.Array
+    ) -> jax.Array:
     """ Return a mask for the n highest values in the last axis
         for a given array
     """
@@ -152,7 +171,6 @@ def mask_n_highest(a, n):
     # add leading dimensions to match pred
     n_th_largest = n_th_largest.reshape((-1,) + (1,)*(a.ndim-1))
     mask_top_n = np.zeros_like(a, dtype=bool)
-    #mask_top_n = mask_top_n.at[a >= n_th_largest].set(True)
     mask_top_n = np.where(a >= n_th_largest, True, False)
     return mask_top_n
 
@@ -166,21 +184,32 @@ def pred_rank(pred, labels):
     ranks = np.squeeze(a[..., ::-1].argsort(axis=-1))
     return ranks[correct_mask]
 
-def fill_predicted_toks(seq, pred, top_n=1, rng=None):
+@partial(jax.jit, static_argnums=(2,4))
+def fill_predicted_toks(
+        seq: jax.Array,
+        pred_logits: jax.Array,
+        top_n: int = 1,
+        rng: jax.random.PRNGKeyArray = None,
+        MASK_TOK: int = Vocab.MASK_TOK,
+    ) -> jax.Array:
     """ Set the predicted token in the given sequence
         when top_n=1, the argmax is used, otherwise a random sample
         from the top_n highest scores is used (propotional to the score)
         rng cannot be None when top_n > 1
     """
     if top_n == 1:
-        vals = pred.argmax(axis=-1)
+        vals = pred_logits.argmax(axis=-1)
     else:
-        vals = sample_pred(pred, top_n, rng)
-    return seq.at[seq == v.MASK_TOK].set(vals)
+        vals = sample_pred(pred_logits, top_n, rng)
+    return np.where(seq == MASK_TOK, vals, seq)
 
-#@partial(np.vectorize, signature="(n),(),(n)->()")
+@partial(jax.jit, static_argnums=(1,))
 @partial(jax.vmap, in_axes=(0, None, 0))
-def sample_pred(pred, top_n, rng):
+def sample_pred(
+        pred: np.ndarray,
+        top_n: int,
+        rng: jax.random.PRNGKeyArray
+    ):
     """ Sample from the top_n predicted labels
     """
     mask_top_n = mask_n_highest(pred, top_n)
@@ -196,25 +225,33 @@ def append_hid_msg(seq):
     l = Message_Tokenizer.MSG_LEN
     return np.concatenate([seq[l:], np.full((Message_Tokenizer.MSG_LEN,), Vocab.HIDDEN_TOK)])
 
+#@chex.chexify
+@jax.jit
+@chex.assert_max_traces(n=1)
 def mask_last_msg_in_seq(
-        seq: np.ndarray,
+        seq: jax.Array,
         i: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[jax.Array, jax.Array]:
     
     l = Message_Tokenizer.MSG_LEN
-    assert (i >= -l) and (i < l), "i must be in [-MSG_LEN, MSG_LEN)"
-    if i >= 0:
-        i += len(seq) - l
+    # slows down execution
+    #checkify.check((i >= -l) & (i < l), "i={} must be in [-MSG_LEN, MSG_LEN)", i)
+    i = jax.lax.cond(
+        i >= 0,
+        lambda x, ls: x + ls - l,
+        lambda x, ls: x,
+        i, seq.shape[0],
+    )
     y = seq[i]
-    return seq.at[i].set(v.MASK_TOK), y
+    return seq.at[i].set(Vocab.MASK_TOK), y
 
 @partial(jax.jit, static_argnums=(3, 4))
 def predict(
-        batch_inputs,
-        batch_integration_timesteps,
-        state,
-        model,
-        batchnorm,
+        batch_inputs: jax.Array,
+        batch_integration_timesteps: jax.Array,
+        state: TrainState,
+        model: flax.linen.Module,
+        batchnorm: bool,
     ):
     if batchnorm:
         logits = model.apply({"params": state.params, "batch_stats": state.batch_stats},
@@ -227,12 +264,17 @@ def predict(
 
     return logits
 
-def filter_valid_pred(pred, valid_mask):
+@jax.jit
+def filter_valid_pred(
+        pred: jax.Array,
+        valid_mask: jax.Array,
+    ):
     """ Filter the predicted distribution to only include valid tokens
     """
     #pred = pred * valid_mask
     # TODO: match shape
-    pred = pred.at[np.tile(valid_mask, (pred.shape[0], 1)) == 0].set(-9999)
+    #pred = pred.at[np.tile(valid_mask, (pred.shape[0], 1)) == 0].set(-9999)
+    pred = np.where(np.tile(valid_mask, (pred.shape[0], 1)) == 0, -9999, pred)
     #pred = pred / pred.sum(axis=-1, keepdims=True)
     # renormalize
     pred = pred - np.log(np.sum(np.exp(pred), axis=-1, keepdims=True))
@@ -321,7 +363,8 @@ def validate_msg(
         tok: Message_Tokenizer,
         vocab: Vocab,
     ) -> bool:
-    """ Validate a message's internal semantics
+    """ TODO: rewrite this for new encoding
+        Validate a message's internal semantics
         Assumes the message is syntactically valid (allowed toks in all places)
         Returns True if valid
     """
@@ -397,19 +440,19 @@ def find_all_msg_occurances(
     # indices of columns to compare
     comp_i = [idx for c in comp_cols for idx in list(range(*get_idx_from_field(c)))]
 
-    print("comp_cols", comp_cols)
-    print("comp_i", comp_i)
-    #print('seq', seq)
-    #print('msg', msg)
+    debug("comp_cols", comp_cols)
+    debug("comp_i", comp_i)
+    #debug('seq', seq)
+    #debug('msg', msg)
 
-    print('searching for (new)', msg[comp_i,])
-    print('in seq', seq[:, comp_i])
+    debug('searching for (new)', msg[comp_i,])
+    debug('in seq', seq[:, comp_i])
 
     # filter down to specific columns
     direct_matches = np.argwhere((seq[:, comp_i] == msg[comp_i,]).all(axis=1))
     
     if len(direct_matches.flatten()) > 0:
-        print('found direct matches')
+        debug('found direct matches')
         return direct_matches
 
     # also search in seq ref part (matching fields)
@@ -426,14 +469,14 @@ def find_all_msg_occurances(
     
     ref_matches = np.argwhere((seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1))
 
-    # print("comp_cols_ref", comp_cols_ref)
-    # print("comp_i_ref", comp_i_ref)
+    # debug("comp_cols_ref", comp_cols_ref)
+    # debug("comp_i_ref", comp_i_ref)
 
-    # print('searching for (ref)', msg[comp_i,])
-    # print('in seq', seq[:, comp_i_ref])
+    # debug('searching for (ref)', msg[comp_i,])
+    # debug('in seq', seq[:, comp_i_ref])
 
     if len(ref_matches.flatten()) > 0:
-        print('found ref matches')
+        debug('found ref matches')
     return ref_matches
 
 def find_all_msg_occurances_raw(
@@ -480,8 +523,8 @@ def try_find_msg(
         matches = find_all_msg_occurances(msg, seq, comp_cols)
         if len(matches) > 0:
             idx = int(matches.flatten()[0])
-            print('found match after removing', n_removed, 'at idx', idx)
+            debug('found match after removing', n_removed, 'at idx', idx)
             return idx, n_removed
         n_removed += 1
-    print('no match found')
+    debug('no match found')
     return None, None
