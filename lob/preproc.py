@@ -157,6 +157,7 @@ def process_book_files(
 
         # remove disallowed order types
         messages = messages.loc[messages.event_type.isin(allowed_events)]
+        # make sure book is same length as messages
         book = book.loc[messages.index]
 
         if filter_above_lvl is not None:

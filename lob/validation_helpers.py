@@ -1,4 +1,5 @@
 from typing import Iterable, Optional, Tuple, Union
+from lob import encoding
 from lob.encoding import Message_Tokenizer, Vocab
 import pandas as pd
 import jax
@@ -26,15 +27,18 @@ def syntax_validation_matrix(v = None):
     """ Create a matrix of shape (MSG_LEN, VOCAB_SIZE) where a
         True value indicates that the token is valid for the location
         in the message.
+        TODO: rewrite and jit
     """
     if v is None:
         v = Vocab()
+    encoder = v.ENCODING
 
     idx = []
     for i in range(Message_Tokenizer.MSG_LEN):
         field = Message_Tokenizer.get_field_from_idx(i)
         decoder_key = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
-        for tok, val in v.DECODING[decoder_key].items():
+        #for tok, val in v.DECODING[decoder_key].items():
+        for tok in encoder[decoder_key][1]:
             idx.append([i, tok])
     idx = tuple(np.array(idx).T)
     mask = np.zeros((Message_Tokenizer.MSG_LEN, len(v)), dtype=bool)
@@ -60,9 +64,9 @@ def syntax_validation_matrix(v = None):
     # adjustment for positions only allowing subset of field
     # e.g. +/- at start of price
     i, _ = get_idx_from_field("price")
-    mask = update_allowed_tok_slice(mask, i, ['+', '-'])
+    mask = update_allowed_tok_slice(mask, i, np.array([1, -1]), encoder['sign'])
     i, _ = get_idx_from_field("price_ref")
-    mask = update_allowed_tok_slice(mask, i, ['+', '-'])
+    mask = update_allowed_tok_slice(mask, i, np.array([1, -1]), encoder['sign'])
 
     # adjustments for special tokens (no MSK or HID) allowed
     # NA always allowed
@@ -82,10 +86,11 @@ def get_valid_mask(
     return valid_mask_array[i]
 
 
-def update_allowed_tok_slice(mask, i, allowed_toks):
-    field = get_field_from_idx(i)
-    enc_type = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
-    allowed_toks = np.array([v.ENCODING[enc_type][t] for t in allowed_toks])
+def update_allowed_tok_slice(mask, i, allowed_toks, field_encoder):
+    #field = get_field_from_idx(i)
+    #enc_type = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
+    #allowed_toks = np.array([v.ENCODING[enc_type][t] for t in allowed_toks])
+    allowed_toks = encoding.encode(allowed_toks, *field_encoder)
     adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
     mask = mask.at[i, :].set(adj_col)
     return mask
@@ -512,7 +517,7 @@ def try_find_msg(
 
     # remove fields from matching criteria
     matching_cols = [
-        ('event_type', 'direction', 'price', 'size', 'time'),
+        ('event_type', 'direction', 'price', 'size', 'time_s', 'time_ns'),
         ('event_type', 'direction', 'price', 'size'),
         ('event_type', 'direction', 'price'),
         #('event_type', 'direction'),

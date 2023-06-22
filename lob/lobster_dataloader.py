@@ -443,7 +443,7 @@ class LOBSTER_Dataset(Dataset):
                 usecols=cols,
                 index_col=False,
                 dtype={
-                    'time': 'float32',
+                    'time': 'float64',
                     'event_type': 'int32',
                     'order_id': 'int32',
                     'size': 'int32',
