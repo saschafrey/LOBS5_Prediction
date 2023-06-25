@@ -753,10 +753,12 @@ def generate(
         debug('len(m_seq_raw)', len(m_seq_raw))
         debug('new raw msg', m_seq_raw.iloc[-1])
 
-        p_mid_old = onp.round((sim.get_best_ask() + sim.get_best_bid()) / 2, -2).astype(int)
+        #p_mid_old = onp.round((sim.get_best_ask() + sim.get_best_bid()) / 2, -2).astype(int)
+        p_mid_old = int((sim.get_best_ask() + sim.get_best_bid()) / 2 // 100 * 100)
         # feed message to simulator, updating book state
         _trades = sim.process_order(sim_msg)
-        p_mid_new = onp.round((sim.get_best_ask() + sim.get_best_bid()) / 2, -2).astype(int)
+        #p_mid_new = onp.round((sim.get_best_ask() + sim.get_best_bid()) / 2, -2).astype(int)
+        p_mid_new = int((sim.get_best_ask() + sim.get_best_bid()) / 2 // 100 * 100)
         # p_change = (p_bid_new - p_bid_old) // tick_size
         p_change = (p_mid_new - p_mid_old) // tick_size
 
