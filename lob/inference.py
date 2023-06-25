@@ -107,8 +107,8 @@ def get_sim(
 
 
 def get_sim_msg(
-        pred_msg_enc: onp.ndarray,
-        m_seq: onp.ndarray,
+        pred_msg_enc: jnp.ndarray,
+        m_seq: jnp.ndarray,
         m_seq_raw: pd.DataFrame,
         sim: OrderBook,
         #tok: Message_Tokenizer,
@@ -116,7 +116,7 @@ def get_sim_msg(
         new_order_id: int,
         tick_size: int,
         encoder: Dict[str, Tuple[jax.Array, jax.Array]],
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[onp.ndarray], Optional[Dict[str, Any]]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[jnp.ndarray], Optional[Dict[str, Any]]]:
     """"""
     # decoded predicted message
     # pred_msg = tok.decode(pred_msg_enc, v).squeeze()
@@ -271,14 +271,14 @@ def get_sim_msg_new(
             time_ns,
         ])
 
-        print('msg_corr \n', msg_corr)
+        # print('msg_corr \n', msg_corr)
 
         # encode corrected message
         # TODO: make this an arg?
         #tok = Message_Tokenizer()
         #v = Vocab()
         #msg_corr = tok.encode_msg(msg_corr, v)
-        msg_corr = encoding.encode_msg(msg_corr, encoder)
+        msg_corr = encoding.encode_msg(msg_corr, encoder)[: Message_Tokenizer.NEW_MSG_LEN]
 
         nan_part = jnp.array((Message_Tokenizer.MSG_LEN - Message_Tokenizer.NEW_MSG_LEN) * [Vocab.NA_TOK])
         msg_corr = jnp.concatenate([msg_corr, nan_part])
@@ -497,14 +497,14 @@ def get_sim_msg_mod(
         time_s,
         time_ns,
     ])
-    print('msg_corr\n', msg_corr)
+    # print('msg_corr\n', msg_corr)
 
     # encode corrected message
     #msg_corr = tok.encode_msg(msg_corr, v)
-    msg_corr = encoding.encode_msg(msg_corr, encoder)
-    print('msg_corr enc (part)\n', msg_corr)
+    msg_corr = encoding.encode_msg(msg_corr, encoder)[: Message_Tokenizer.NEW_MSG_LEN]
+    # print('msg_corr enc (part)\n', msg_corr)
     msg_corr = onp.concatenate([msg_corr, orig_msg_found])
-    print('msg_corr enc (full)\n', msg_corr)
+    # print('msg_corr enc (full)\n', msg_corr)
 
     return order_dict, msg_corr, raw_dict
 
@@ -635,7 +635,7 @@ def get_sim_msg_exec(
 
     # encode corrected message
     #msg_corr = tok.encode_msg(msg_corr, v)
-    msg_corr = encoding.encode_msg(msg_corr, encoder)
+    msg_corr = encoding.encode_msg(msg_corr, encoder)[: Message_Tokenizer.NEW_MSG_LEN]
     msg_corr = onp.concatenate([msg_corr, orig_msg_found])
 
     return order_dict, msg_corr, raw_dict
@@ -670,7 +670,7 @@ def sim_order_to_raw(order_dict: Dict[str, Any], event_type: int):
         'direction': int(order_dict['side']) * 2 - 1,
     }
 
-#@jax.jit
+@jax.jit
 def add_times(
         a_s: jax.Array,
         a_ns: jax.Array,
@@ -686,7 +686,7 @@ def add_times(
     a_ns = b_ns + a_ns
     extra_s = a_ns // 1000000000
     a_ns = a_ns % 1000000000
-    print(a_ns, extra_s)
+    # print(a_ns, extra_s)
 
     a_s = a_s + b_s + extra_s
     return a_s, a_ns
@@ -694,7 +694,7 @@ def add_times(
 def generate(
         m_seq: jax.Array,
         b_seq: jax.Array,
-        m_seq_raw: pd.DataFrame,
+        m_seq_raw: jax.Array,
         n_msg_todo: int,
         sim: OrderBook,
         train_state: TrainState,
@@ -733,8 +733,9 @@ def generate(
             *encoder['time'],
         )
         time_init_s = encoding.combine_field(time_init_s, 3)
+        
         time_init_ns = encoding.decode(
-            m_seq[last_start_i + time_ns_start_i: last_start_i + time_ns_end_i + 1],
+            m_seq[last_start_i + time_ns_start_i: last_start_i + time_ns_end_i],
             *encoder['time'],
         )
         time_init_ns = encoding.combine_field(time_init_ns, 3)
@@ -744,7 +745,7 @@ def generate(
         m_seq = valh.append_hid_msg(m_seq)
         # jax.block_until_ready(m_seq)
 
-        # TODO: calculating time in case where generation is not seqeuentially left to right
+        # TODO: calculating time in case where generation is not sequentially left to right
         #       --> check if delta_t complete --> calc time once
 
         # get next message: generate l tokens
@@ -876,7 +877,7 @@ def generate(
         #p_mid_new = onp.round((sim.get_best_ask() + sim.get_best_bid()) / 2, -2).astype(int)
         p_mid_new = (sim.get_best_ask() + sim.get_best_bid()) / 2
         p_mid_new = (p_mid_new // tick_size) * tick_size
-        p_change = (p_mid_new - p_mid_old) // tick_size
+        p_change = int((p_mid_new - p_mid_old) // tick_size)
 
         # get new book state
         #book = sim.get_L2_state()

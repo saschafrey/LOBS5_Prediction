@@ -122,7 +122,7 @@ def encode_msg(msg, encoding):
     out = [
         event_type, direction, price_sign, price, size, time_comb, # delta_t, time_s, time_ns,
         price_ref_sign, price_ref, size_ref, time_ref_comb]
-    return jnp.hstack(out[:msg.shape[0]]) # time_s_ref, time_ns_ref])
+    return jnp.hstack(out) # time_s_ref, time_ns_ref])
     
 
 encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0,)))
