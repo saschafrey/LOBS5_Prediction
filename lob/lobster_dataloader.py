@@ -21,6 +21,7 @@ import jax.numpy as jnp
 from jax.nn import one_hot
 # from jax.experimental import sparse
 
+import lob.encoding as encoding
 from lob.encoding import Vocab, Message_Tokenizer
 from lob.preproc import transform_L2_state
 from s5.dataloaders.base import default_data_path, SequenceDataset
@@ -145,13 +146,16 @@ class LOBSTER_Dataset(Dataset):
         msk_i = rng.integers(i_start, i_end)
         # select random token from last message from selected field
         y = seq[-1][msk_i]
-        seq[-1][msk_i] = Vocab.MASK_TOK
+        # seq[-1][msk_i] = Vocab.MASK_TOK
+        seq = seq.at[-1, msk_i].set(Vocab.MASK_TOK)
         # set tokens after MSK token to HIDDEN for masked field
         if msk_i < (i_end - 1):
-            seq[-1][msk_i + 1: i_end] = Vocab.HIDDEN_TOK
+            # seq[-1][msk_i + 1: i_end] = Vocab.HIDDEN_TOK
+            seq = seq.at[-1, msk_i + 1: i_end].set(Vocab.HIDDEN_TOK)
         # set all hidden_fields to HIDDEN
         for f in hidden_fields:
-            seq[-1][slice(*LOBSTER_Dataset._get_tok_slice_i(f))] = Vocab.HIDDEN_TOK
+            # seq[-1][slice(*LOBSTER_Dataset._get_tok_slice_i(f))] = Vocab.HIDDEN_TOK
+            seq = seq.at[-1, slice(*LOBSTER_Dataset._get_tok_slice_i(f))].set(Vocab.HIDDEN_TOK)
         return seq, y
     
     #@jax.jit
@@ -231,10 +235,13 @@ class LOBSTER_Dataset(Dataset):
         """
         n_fields = len(Message_Tokenizer.FIELDS)
         msk_field = rng.integers(0, n_fields - 1)
-        i_time = Message_Tokenizer.FIELDS.index('time')
-        if msk_field >= i_time:
+        i_time_s = Message_Tokenizer.FIELDS.index('time_s')
+        i_time_ns = Message_Tokenizer.FIELDS.index('time_ns')
+        if msk_field == i_time_s:
+            msk_field += 2
+        elif msk_field >= i_time_ns:
             msk_field += 1
-        #return tuple(range(msk_field)), msk_field
+        # hidden_fields, msk_field
         return tuple(range(msk_field + 1, n_fields)), msk_field
 
     # @staticmethod
@@ -268,7 +275,6 @@ class LOBSTER_Dataset(Dataset):
             # if given, also load and return raw sequences
             # -> used for inference (not training!)
             return_raw_msgs=False,
-            raw_message_files=None,
             ) -> None:
 
         assert len(message_files) > 0
@@ -285,15 +291,7 @@ class LOBSTER_Dataset(Dataset):
         self.use_simple_book = use_simple_book
         self.book_transform = book_transform
         self.book_depth = book_depth
-
         self.return_raw_msgs = return_raw_msgs
-        self.raw_message_files = raw_message_files
-        if self.return_raw_msgs:
-            assert raw_message_files is not None
-            assert len(raw_message_files) == len(message_files), \
-                str(len(raw_message_files)) + '!=' + str(len(message_files))
-            self._raw_msg_cache = OrderedDict()
-
         self.num_days = len(self.message_files)
         self.n_messages = n_messages
 
@@ -360,8 +358,6 @@ class LOBSTER_Dataset(Dataset):
             X = np.load(self.message_files[file_idx], mmap_mode='r')
             if self.use_book_data:
                 book = np.load(self.book_files[file_idx], mmap_mode='r')
-            if self.return_raw_msgs:
-                raise NotImplementedError
         else:
             if file_idx not in self._message_cache:
                 self._add_to_cache(file_idx)
@@ -370,14 +366,19 @@ class LOBSTER_Dataset(Dataset):
             X = self._message_cache[file_idx]
             if self.use_book_data:
                 book = self._book_cache[file_idx]
-            if self.return_raw_msgs:
-                raw_msgs = self._raw_msg_cache[file_idx]
 
         seq_start = self.seq_offsets[file_idx] + seq_idx * self.n_messages
         seq_end = seq_start + self.n_messages
-        #print('len X', len(X))
-        #print(f'slice ({seq_start}, {seq_end})')
-        X = X[seq_start: seq_end]
+        
+        X_raw = jnp.array(X[seq_start: seq_end])
+        # encode message
+        
+        # if self.return_raw_msgs:
+        #     X = encoding.encode_msgs(X_raw, self.vocab.ENCODING)
+        # else:
+        #     X = X_raw
+        X = encoding.encode_msgs(X_raw, self.vocab.ENCODING)
+
         # apply mask and extract prediction target token
         X, y = self.mask_fn(X, self.rng)
         #X, y = self.mask_fn(X, self.rng_jax)
@@ -394,7 +395,8 @@ class LOBSTER_Dataset(Dataset):
             # tranform from L2 (price volume) representation to fixed volume image 
             if self.book_transform:
                 #book = jax.device_put(book, device=jax.devices("cpu")[0])
-                book = np.array(transform_L2_state(book, self.book_depth, 100))
+                #book = np.array(transform_L2_state(book, self.book_depth, 100))
+                book = transform_L2_state(book, self.book_depth, 100)
 
             # use raw price, volume series, rather than volume image
             # subtract initial price to start all sequences around 0
@@ -412,9 +414,9 @@ class LOBSTER_Dataset(Dataset):
 
         if self.return_raw_msgs:
             if self.use_book_data:
-                ret_tuple += (raw_msgs.iloc[seq_start: seq_end].reset_index(drop=True).copy(), book_l2_init)
+                ret_tuple += (X_raw, book_l2_init)
             else:
-                ret_tuple += (raw_msgs.iloc[seq_start: seq_end].copy(),)
+                ret_tuple += (X_raw,)
 
         return ret_tuple
 
@@ -424,8 +426,6 @@ class LOBSTER_Dataset(Dataset):
             _ = self._message_cache.popitem(last=False)
             if self.use_book_data:
                 _ = self._book_cache.popitem(last=False)
-            if self.return_raw_msgs:
-                _ = self._raw_msg_cache.popitem(last=False)
             del _
 
         Xm = np.load(self.message_files[file_idx], mmap_mode='r')
@@ -434,86 +434,6 @@ class LOBSTER_Dataset(Dataset):
         if self.use_book_data:
             Xb = np.load(self.book_files[file_idx], mmap_mode='r')
             self._book_cache[file_idx] = Xb
-        
-        if self.return_raw_msgs:
-            cols = ['time', 'event_type', 'order_id', 'size', 'price', 'direction']
-            raw_msgs = pd.read_csv(
-                self.raw_message_files[file_idx],
-                names=cols,
-                usecols=cols,
-                index_col=False,
-                dtype={
-                    'time': 'float64',
-                    'event_type': 'int32',
-                    'order_id': 'int32',
-                    'size': 'int32',
-                    'price': 'int32',
-                    'direction': 'int32'
-                }
-            )
-            # filter allowed event types and drop first message
-            # (--> same indexing as encoded messages)
-            # TODO: make allowed_event_types a parameter
-            raw_msgs = raw_msgs.loc[raw_msgs.event_type.isin([1, 2, 3, 4])].iloc[1:]
-            self._raw_msg_cache[file_idx] = raw_msgs
-
-    '''
-    def __getitem__(self, idx):
-        file_idx, seq_idx = self._get_seq_location(idx)
-        # load file in cache if possible
-        self._try_load_cache(file_idx)
-            
-        # access data from cache
-        if file_idx in self._file_cache:
-            X = self._file_cache[file_idx]
-        # load sequence from file directly without cache
-        else:
-            X = np.load(self.message_files[file_idx], mmap_mode='r')
-
-        X = X[seq_idx: seq_idx + self.n_messages]
-        #print('pre mask fn', X.shape)
-
-        # apply mask and extract prediction target token
-        X, y = self.mask_fn(X, self.rng)
-
-        #print('pre enc', X.shape, y.shape)
-
-        # onehot encode
-        #X = self._encode_features(X.reshape(-1))
-        X = X.reshape(-1)
-        #y = self._encode_features(y.reshape(-1))
-        y = y.reshape(-1)
-        #print('post enc', X.shape, y.shape)
-        
-        # X, y (last element of sequence), aux_data (time data)
-        #return X[:-1, :], X[-1, :], X[:, 0]
-        # TODO: look into aux_data (could we still use time when available?)
-        return X, y#, None
-
-    def _try_load_cache(self, file_idx):
-        """ add file to cache if not full and not yet in cache
-            TODO: implement proper cache
-        """
-        if (len(self._file_cache) < self.n_buffer_files) and (file_idx not in self._file_cache):
-            #df = pd.read_csv(
-            #    self.message_files[file_idx],
-            #    names = ['time', 'event_type', 'order_id', 'size', 'price', 'direction'],
-            #    index_col = False
-            #)
-            #X = df[['time', 'event_type', 'size', 'price', 'direction']].values
-            X = np.load(self.message_files[file_idx])
-            #X = torch.tensor(self._encode_features(X))
-            #X = self._encode_features(X)
-            self._file_cache[file_idx] = X
-    
-    def _encode_features(self, X):
-        """ DEPRECATED: one-hot encoding done for entire batch instead
-        """
-        vocab_size = len(self.vocab)
-        res = np.eye(vocab_size)[X.reshape(-1)]
-        res = res.reshape(list(X.shape)+[vocab_size])
-        return res
-    '''
 
     def _get_num_rows(self, file_path):
         #with open(file_path) as f:
@@ -683,7 +603,7 @@ class LOBSTER(SequenceDataset):
             "book_transform": False,
             "n_cache_files": 0,
             "book_depth": 500,
-            "raw_data_dir": None,
+            "return_raw_msgs": False,
         }
 
     def setup(self):
@@ -700,12 +620,6 @@ class LOBSTER(SequenceDataset):
         else:
             book_files = None
         # raw message files
-        if self.raw_data_dir is not None:
-            self.return_raw_msgs = True
-            self.raw_message_files = sorted(glob(self.raw_data_dir + '*message*.csv'))
-        else:
-            self.return_raw_msgs = False
-            self.raw_message_files = None
 
         n_test_files = max(1, int(len(message_files) * self.test_split))
 
@@ -716,24 +630,13 @@ class LOBSTER(SequenceDataset):
 
         self.rng = random.Random(self.seed)
 
-        if self.raw_message_files:
-            self.train_raw_message_files = self.raw_message_files[:len(self.train_files)]
-            self.test_raw_message_files = self.raw_message_files[len(self.train_files):]
-        else:
-            self.train_raw_message_files = None
-            self.val_raw_message_files = None
-            self.test_raw_message_files = None
-
         # TODO: case of raw data but no book data?
 
         if book_files:
             self.train_book_files = book_files[:len(book_files) - n_test_files]
             self.test_book_files = book_files[len(self.train_book_files):]
             # zip together message and book files to randomly sample together
-            if self.return_raw_msgs:
-                self.train_files = list(zip(self.train_files, self.train_book_files, self.train_raw_message_files))
-            else:
-                self.train_files = list(zip(self.train_files, self.train_book_files))
+            self.train_files = list(zip(self.train_files, self.train_book_files))
         else:
             self.train_book_files = None
             self.val_book_files = None
@@ -745,14 +648,8 @@ class LOBSTER(SequenceDataset):
                 self.rng.randrange(0, len(self.train_files))
             ) for _ in range(int(np.ceil(self.val_split * len(message_files))))]
         if book_files:
-            if self.return_raw_msgs:
-                self.train_files, self.train_book_files, self.train_raw_message_files = \
-                    zip(*self.train_files)
-                self.val_files, self.val_book_files, self.val_raw_message_files = \
-                    zip(*self.val_files)
-            else:
-                self.train_files, self.train_book_files = zip(*self.train_files)
-                self.val_files, self.val_book_files = zip(*self.val_files)
+            self.train_files, self.train_book_files = zip(*self.train_files)
+            self.val_files, self.val_book_files = zip(*self.val_files)
 
         #n_cache_files = 0
         self.dataset_train = LOBSTER_Dataset(
@@ -767,7 +664,6 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
-            raw_message_files=self.train_raw_message_files,
         )
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = len(self.dataset_train.vocab)
@@ -791,7 +687,6 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
-            raw_message_files=self.val_raw_message_files,
         )
 
         self.dataset_test = LOBSTER_Dataset(
@@ -806,7 +701,6 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
-            raw_message_files=self.test_raw_message_files,
         )
 
     def reset_train_offsets(self):
@@ -829,7 +723,6 @@ class LOBSTER(SequenceDataset):
             book_transform=self.book_transform,
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
-            raw_message_files=self.train_raw_message_files,
         )
     #     indices = [i for i in range(len(self.dataset_train)) if i not in self.val_indices]
     #     # remove the first and last val sequence to avoid overlapping observations

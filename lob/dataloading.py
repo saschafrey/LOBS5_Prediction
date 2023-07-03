@@ -27,7 +27,8 @@ def create_lobster_prediction_dataset(
 		use_simple_book: bool = False,
 		book_transform: bool = False,
 		book_depth: int = 500,
-		n_data_workers: int = 0
+		n_data_workers: int = 0,
+		return_raw_msgs: bool = False,
 	) -> ReturnType:
 	""" 
 	"""
@@ -51,6 +52,7 @@ def create_lobster_prediction_dataset(
 		book_transform=book_transform,
 		book_depth=book_depth,
 		n_cache_files=1e7,  # large number to keep everything in cache
+		return_raw_msgs=return_raw_msgs,
 	)
 	dataset_obj.setup()
 

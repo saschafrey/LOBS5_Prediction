@@ -8,7 +8,9 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from glob import glob
+from decimal import Decimal
 from functools import partial
+# import lob.encoding as encoding
 
 from lob.encoding import Vocab, Message_Tokenizer
 
@@ -56,6 +58,27 @@ def transform_L2_state(
     return mybook 
 
 
+def load_message_df(m_f: str) -> pd.DataFrame:
+    cols = ['time', 'event_type', 'order_id', 'size', 'price', 'direction']
+    messages = pd.read_csv(
+        m_f,
+        names=cols,
+        usecols=cols,
+        index_col=False,
+        dtype={
+            #'time': 'float64',
+            'time': str,
+            'event_type': 'int32',
+            'order_id': 'int32',
+            'size': 'int32',
+            'price': 'int32',
+            'direction': 'int32'
+        }
+    )
+    messages.time = messages.time.apply(lambda x: Decimal(x))
+    return messages
+
+
 def process_message_files(
         message_files: list[str],
         book_files: list[str],
@@ -74,13 +97,8 @@ def process_message_files(
         if skip_existing and Path(m_path).exists():
             print('skipping', m_path)
             continue
-
-        col_names = ['time', 'event_type', 'order_id', 'size', 'price', 'direction']
-        messages = pd.read_csv(
-            m_f,
-            names=col_names,
-            usecols=col_names,
-            index_col=False)
+        
+        messages = load_message_df(m_f)
 
         book = pd.read_csv(
             b_f,
@@ -95,8 +113,10 @@ def process_message_files(
         
         print('<< pre processing >>')
         m_ = tok.preproc(messages, book)
-        print('<< encoding >>')
-        m_ = tok.encode(m_, v)
+        #print(m_)
+        # NEW: don't encode in preproce, do it when loading data
+        #print('<< encoding >>')
+        #m_ = encoding.encode_msgs(jnp.array(m_), v.ENCODING)
 
         # save processed messages
         np.save(m_path, m_)
@@ -144,10 +164,7 @@ def process_book_files(
             print('skipping', b_path)
             continue
 
-        messages = pd.read_csv(
-            m_f,
-            names=['time', 'event_type', 'order_id', 'size', 'price', 'direction'],
-            index_col=False)
+        messages = load_message_df(m_f)
 
         book = pd.read_csv(
             b_f,

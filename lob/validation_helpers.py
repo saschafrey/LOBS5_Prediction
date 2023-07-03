@@ -211,10 +211,10 @@ def fill_predicted_toks(
 @partial(jax.jit, static_argnums=(1,))
 @partial(jax.vmap, in_axes=(0, None, 0))
 def sample_pred(
-        pred: np.ndarray,
+        pred: jax.Array,
         top_n: int,
         rng: jax.random.PRNGKeyArray
-    ):
+    ) -> jax.Array:
     """ Sample from the top_n predicted labels
     """
     mask_top_n = mask_n_highest(pred, top_n)
@@ -447,11 +447,11 @@ def find_all_msg_occurances(
 
     debug("comp_cols", comp_cols)
     debug("comp_i", comp_i)
-    #debug('seq', seq)
-    #debug('msg', msg)
 
     debug('searching for (new)', msg[comp_i,])
-    debug('in seq', seq[:, comp_i])
+    seq_filtered = seq[(seq != -1).all(axis=1)]
+    debug('in seq', seq_filtered[:, comp_i])
+    debug('non-masked len', len(seq[(seq != -1).all(axis=1)]))
 
     # filter down to specific columns
     direct_matches = np.argwhere((seq[:, comp_i] == msg[comp_i,]).all(axis=1))
@@ -464,6 +464,7 @@ def find_all_msg_occurances(
     
     comp_cols_ref = \
         [c for c in comp_cols if (c + '_ref' in Message_Tokenizer.FIELDS)]
+    debug("comp_cols_ref", comp_cols_ref)
     comp_i = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c)))]
     comp_i_ref = [idx for c in comp_cols_ref for idx in list(range(*get_idx_from_field(c + '_ref')))]
     
@@ -471,6 +472,12 @@ def find_all_msg_occurances(
         comp_cols_ref += ['direction']  # direction field should be added to ref search
         comp_i += list(range(*get_idx_from_field('direction')))
         comp_i_ref += list(range(*get_idx_from_field('direction')))
+    comp_i = sorted(comp_i)
+    comp_i_ref = sorted(comp_i_ref)
+    debug('ref search for ...')
+    debug(msg[comp_i,])
+    debug('... in:')
+    debug(seq_filtered[:, comp_i_ref])
     
     ref_matches = np.argwhere((seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1))
 
@@ -519,7 +526,7 @@ def try_find_msg(
     matching_cols = [
         ('event_type', 'direction', 'price', 'size', 'time_s', 'time_ns'),
         ('event_type', 'direction', 'price', 'size'),
-        ('event_type', 'direction', 'price'),
+        #('event_type', 'direction', 'price'),
         #('event_type', 'direction'),
     ]
     n_removed = 0

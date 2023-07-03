@@ -1,3 +1,4 @@
+from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 import jax
@@ -72,101 +73,189 @@ def split_field(x, n_tokens, tok_len, prepend_sign_token=False):
         x)
 
 @partial(jax.jit, static_argnums=(1,))
-def combine_field(x, tok_len, sign=1):
+def combine_field(
+        x: jax.Array,
+        tok_len: int,
+        sign: jax.Array = jnp.array(1)
+    ):
     return jax.lax.cond(
-        is_special_val(x),
+        is_special_val(jnp.concatenate((sign.flatten(), x.flatten()))),
         lambda arg: NA_VAL,
         lambda arg: combine_int(arg, tok_len, sign),
         x)
 
 # event_type	direction	price	size	delta_t	time_s	time_ns	price_ref	size_ref	time_s_ref	time_ns_ref
 @jax.jit
-def encode_msg(msg, encoding):
-    event_type = encode(msg[0], *encoding['event_type'])
+def encode_msg(
+        msg: jax.Array,
+        encoding: Dict[str, Tuple[jax.Array, jax.Array]],
+    ) -> jax.Array:
+    event_type = encode(msg[1], *encoding['event_type'])
     
-    direction = encode(msg[1], *encoding['direction'])
-    
-    price = split_field(msg[2], 1, 3, True)
+    direction = encode(msg[2], *encoding['direction'])
+    # NOTE: leave out price_abs in msg[3]
+    price = split_field(msg[4], 1, 3, True)
+    # CAVE: temporary fix to switch tokens for + and - sign
+    # price_sign = (price[0] == 1) * (-1) + (price[0] == -1) * 1 + (jnp.abs(price[0]) != 0) * price[0]
     price_sign = encode(price[0], *encoding['sign'])
     price = encode(price[1], *encoding['price'])
     
-    size = encode(msg[3], *encoding['size'])
+    size = encode(msg[5], *encoding['size'])
     
-    delta_t_s = msg[4]
-    # delta_t = encode(delta_t, *encoding['time'])
-    delta_t_ns = split_field(msg[5], 3, 3, False)
+    # delta_t_s = msg[6]
+    # delta_t_ns = split_field(msg[7], 3, 3, False)
     
-    time_s = split_field(msg[6], 2, 3, False)
-    # time_s = encode(time_s, *encoding['time'])
+    # convert seconds after midnight to seconds after exchange open
+    # --> 9.5 * 3600 = 34200
+    # time_s = split_field(msg[8] - 34200, 2, 3, False)
     
-    time_ns = split_field(msg[7], 3, 3, False)
-    # time_ns = encode(time_ns, *encoding['time'])
-    #time_comb = split_field(msg[4:8], 9, 3, False)
-    time_comb = jnp.hstack([delta_t_s, delta_t_ns, time_s, time_ns])
-    time_comb = encode(time_comb, *encoding['time'])
+    # time_ns = split_field(msg[9], 3, 3, False)
+    # # time_ns = encode(time_ns, *encoding['time'])
+    # #time_comb = split_field(msg[4:8], 9, 3, False)
+    # time_comb = jnp.hstack([delta_t_s, delta_t_ns, time_s, time_ns])
+    # time_comb = encode(time_comb, *encoding['time'])
+    time_comb = encode_time(
+        time_s = msg[8], 
+        time_ns = msg[9],
+        encoding = encoding,
+        delta_t_s = msg[6],
+        delta_t_ns = msg[7],
+    )
 
-    price_ref = split_field(msg[8], 1, 3, True)
+    price_ref = split_field(msg[10], 1, 3, True)
+    # CAVE: temporary fix to switch tokens for + and - sign
+    # price_ref_sign = (price_ref[0] == 1) * (-1) + (price_ref[0] == -1) * 1 + (jnp.abs(price_ref[0]) != 0) * price_ref[0]
     price_ref_sign = encode(price_ref[0], *encoding['sign'])
     price_ref = encode(price_ref[1], *encoding['price'])
 
-    size_ref = encode(msg[9], *encoding['size'])
+    size_ref = encode(msg[11], *encoding['size'])
 
-    time_s_ref = split_field(msg[10], 2, 3, False)
-    #time_s_ref = encode(time_s_ref, *encoding['time'])
+    # time_s_ref = split_field(msg[12], 2, 3, False)
+    # #time_s_ref = encode(time_s_ref, *encoding['time'])
 
-    time_ns_ref = split_field(msg[11], 3, 3, False)
-    #time_ns_ref = encode(time_ns_ref, *encoding['time'])
-    time_ref_comb = jnp.hstack([time_s_ref, time_ns_ref])
-    time_ref_comb = encode(time_ref_comb, *encoding['time'])
+    # time_ns_ref = split_field(msg[13], 3, 3, False)
+    # #time_ns_ref = encode(time_ns_ref, *encoding['time'])
+    # time_ref_comb = jnp.hstack([time_s_ref, time_ns_ref])
+    # time_ref_comb = encode(time_ref_comb, *encoding['time'])
+    time_ref_comb = encode_time(
+        time_s = msg[12], 
+        time_ns = msg[13],
+        encoding = encoding
+    )
 
     out = [
         event_type, direction, price_sign, price, size, time_comb, # delta_t, time_s, time_ns,
         price_ref_sign, price_ref, size_ref, time_ref_comb]
     return jnp.hstack(out) # time_s_ref, time_ns_ref])
-    
 
-encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0,)))
+encode_msgs = jax.jit(jax.vmap(encode_msg, in_axes=(0, None)))
+
+@jax.jit
+def encode_time(
+        time_s: jax.Array,
+        time_ns: jax.Array,
+        encoding: Dict[str, Tuple[jax.Array, jax.Array]],
+        delta_t_s: Optional[jax.Array] = None,
+        delta_t_ns: Optional[jax.Array] = None,
+    ) -> jax.Array:
+    # convert seconds after midnight to seconds after exchange open
+    # --> 9.5 * 3600 = 34200
+    # time_s = split_field(time_s - 34200, 2, 3, False)
+    time_s = split_field(time_s, 2, 3, False)
+    time_ns = split_field(time_ns, 3, 3, False)
+    if delta_t_s is None and delta_t_ns is None:
+        time_comb = jnp.hstack([time_s, time_ns])
+    else:
+        delta_t_ns = split_field(delta_t_ns, 3, 3, False)
+        time_comb = jnp.hstack([delta_t_s, delta_t_ns, time_s, time_ns])
+    time_comb = encode(time_comb, *encoding['time'])
+    return time_comb
+
 
 @jax.jit
 def decode_msg(msg_enc, encoding):
-    event_type = encode(msg_enc[0], *encoding['event_type'][::-1])
-    
-    direction = encode(msg_enc[1], *encoding['direction'][::-1])
+    # TODO: check if fields with same decoder can be combined into one decode call
 
-    price_sign = encode(msg_enc[2], *encoding['sign'][::-1])
-    price = encode(msg_enc[3], *encoding['price'][::-1])
+    event_type = decode(msg_enc[0], *encoding['event_type'])
+    
+    direction = decode(msg_enc[1], *encoding['direction'])
+
+    price_sign =  decode(msg_enc[2], *encoding['sign'])
+    # CAVE: temporary fix to change + and - price sign
+    # price_sign = (price_sign == 1) * (-1) + (price_sign == -1) * 1 + (jnp.abs(price_sign) != 0) * price_sign
+    price = decode(msg_enc[3], *encoding['price'])
     price = combine_field(price, 3, price_sign)
 
-    size = encode(msg_enc[4], *encoding['size'][::-1])
+    size = decode(msg_enc[4], *encoding['size'])
 
-    delta_t_s = encode(msg_enc[5], *encoding['time'][::-1])
+    ###
+    # delta_t_s = decode(msg_enc[5], *encoding['time'])
 
-    delta_t_ns = encode(msg_enc[6:9], *encoding['time'][::-1])
-    delta_t_ns = combine_field(delta_t_ns, 3)
+    # delta_t_ns = decode(msg_enc[6:9], *encoding['time'])
+    # delta_t_ns = combine_field(delta_t_ns, 3)
 
-    time_s = encode(msg_enc[9:11], *encoding['time'][::-1])
-    time_s = combine_field(time_s, 3)
+    # time_s = decode(msg_enc[9:11], *encoding['time'])
+    # # convert time_s to seconds after midnight
+    # time_s = combine_field(time_s, 3) + 34200
 
-    time_ns = encode(msg_enc[11:14], *encoding['time'][::-1])
-    time_ns = combine_field(time_ns, 3)
+    # time_ns = decode(msg_enc[11:14], *encoding['time'])
+    # time_ns = combine_field(time_ns, 3)
+    ###
+    delta_t_s, delta_t_ns, time_s, time_ns = decode_time(msg_enc[5:14], encoding)
 
-    price_ref_sign = encode(msg_enc[14], *encoding['sign'][::-1])
-    price_ref = encode(msg_enc[15], *encoding['price'][::-1])
+    price_ref_sign = decode(msg_enc[14], *encoding['sign'])
+    # CAVE: temporary fix to change + and - price sign
+    # price_ref_sign = (price_ref_sign == 1) * (-1) + (price_ref_sign == -1) * 1 + (jnp.abs(price_ref_sign) != 0) * price_ref_sign
+    price_ref = decode(msg_enc[15], *encoding['price'])
     price_ref = combine_field(price_ref, 3, price_ref_sign)
 
-    size_ref = encode(msg_enc[16], *encoding['size'][::-1])
+    size_ref = decode(msg_enc[16], *encoding['size'])
 
-    time_s_ref = encode(msg_enc[17:19], *encoding['time'][::-1])
-    time_s_ref = combine_field(time_s_ref, 3)
+    # time_s_ref = decode(msg_enc[17:19], *encoding['time'])
+    # time_s_ref = combine_field(time_s_ref, 3) + 34200
 
-    time_ns_ref = encode(msg_enc[19:22], *encoding['time'][::-1])
-    time_ns_ref = combine_field(time_ns_ref, 3)
+    # time_ns_ref = decode(msg_enc[19:22], *encoding['time'])
+    # time_ns_ref = combine_field(time_ns_ref, 3)
+    time_s_ref, time_ns_ref = decode_time(msg_enc[17:22], encoding)
 
-    return jnp.hstack([
-        event_type, direction, price, size, delta_t_s, delta_t_ns, time_s, time_ns,
+    # order ID is not encoded, so it's set to NA
+    # same for price_abs
+    return jnp.hstack([ NA_VAL,
+        event_type, direction, NA_VAL, price, size, delta_t_s, delta_t_ns, time_s, time_ns,
         price_ref, size_ref, time_s_ref, time_ns_ref])
 
 decode_msgs = jax.jit(jax.vmap(decode_msg, in_axes=(0,)))
+
+@jax.jit
+def decode_time(time_toks, encoding):
+    if time_toks.shape[0] == 0:
+        return NA_VAL, NA_VAL
+    time = decode(time_toks, *encoding['time'])
+    # delta_t and time given
+    if time.shape[0] == 9:
+        delta_t_s = time[0]
+        delta_t_ns = combine_field(time[1:4], 3)
+        time_s = combine_field(time[4:6], 3) #+ 34200
+        time_ns = combine_field(time[6:], 3)
+
+        return delta_t_s, delta_t_ns, time_s, time_ns
+    # only time given
+    elif time.shape[0] == 5:
+        # convert time_s to seconds after midnight
+        time_s = combine_field(time[:2], 3) #+ 34200
+        time_ns = combine_field(time[2:], 3)
+
+        return time_s, time_ns
+
+def repr_raw_msg(msg):
+    field_names = ['OID', 'event_type', 'direction', 'price_abs', 'price', 'size',
+                   'delta_t_s', 'delta_t_ns', 'time_s', 'time_ns',
+                   'p_ref', 'size_ref', 'time_s_ref', 'time_ns_ref']
+    out = ''
+    for name, val in zip(field_names, msg):
+        # TODO: format spacing
+        out += name + ":\t" + str(val) + "\n"
+    return out
 
 class Vocab:
 
@@ -190,8 +279,8 @@ class Vocab:
         self._add_field('time', range(1000), [3,6,9,12])
         self._add_field('event_type', range(1,5), None)
         self._add_field('size', range(10000), [])
-        self._add_field('sign', [-1, 1], None)
         self._add_field('price', range(1000), [1])
+        self._add_field('sign', [-1, 1], None)
         self._add_field('direction', [0, 1], None)
 
         #self._add_field('generic', [str(i) for i in range(10)] + ['+', '-'])
@@ -210,7 +299,7 @@ class Vocab:
         # self.counter += len(enc)
         # self.TOKEN_DELIM_IDX[name] = delim_i
 
-        enc = [(-10000, Vocab.MASK_TOK), (-20000, Vocab.HIDDEN_TOK), (-9999, Vocab.NA_TOK)]
+        enc = [(MASK_VAL, Vocab.MASK_TOK), (HIDDEN_VAL, Vocab.HIDDEN_TOK), (NA_VAL, Vocab.NA_TOK)]
         enc += [(val, self.counter + i) for i, val in enumerate(values)]
         self.counter += len(enc) - 3  # don't count special tokens
         enc = tuple(zip(*enc))
@@ -574,27 +663,28 @@ class Message_Tokenizer:
             column='delta_t_s',
             value=m.delta_t_ns.astype(int)
         )
-        m.delta_t_ns = ((m.delta_t_ns - m.delta_t_s) * 1e9).astype(int)
+        m.delta_t_ns = ((m.delta_t_ns % 1) * 1000000000).astype(int)
 
         # subtract opening time and convert to ns integer
-        opening_s = 9.5 * 3600  # NASDAQ opens 9:30
+        #opening_s = 9.5 * 3600  # NASDAQ opens 9:30
         #closing_s = 16 * 3600   # and closes at 16:00
-        m['time'] = (m['time'] - opening_s)#.multiply(1e9)
+        #m['time'] = (m['time'] - opening_s)#.multiply(1e9)
         # split time into time before and after decimal point to fit into int32 for jax
         m.insert(0, 'time_s', m.time.astype(int))
         m.rename(columns={'time': 'time_ns'}, inplace=True)
-        m.time_ns = ((m.time_ns - m.time_s) * 1e9).astype(int)
+        m.time_ns = ((m.time_ns % 1) * 1000000000).astype(int)
         
         # SIZE
         m.loc[m['size'] > 9999, 'size'] = 9999
         m['size'] = m['size'].astype(int)
 
         # PRICE
+        m['price_abs'] = m.price  # keep absolute price for later (simulator)
         # (previous) best bid
         #bb = b.iloc[:, 2].shift()
         # mid-price reference, rounded down to nearest tick_size
         tick_size = 100
-        p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2)#.round(-2).astype(int).shift()
+        p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2).shift()#.round(-2).astype(int).shift()
         p_ref = (p_ref // tick_size) * tick_size
         # --> 1999 price levels // ...00 since tick size is 100
         m.price = self._preproc_prices(m.price, p_ref, p_lower_trunc=-99900, p_upper_trunc=99900)
@@ -605,17 +695,17 @@ class Message_Tokenizer:
         m.direction = ((m.direction + 1) / 2).astype(int)
 
         # change column order
-        m = m[['order_id', 'event_type', 'direction', 'price', 'size',
+        m = m[['order_id', 'event_type', 'direction', 'price_abs', 'price', 'size',
                'delta_t_s', 'delta_t_ns', 'time_s', 'time_ns']]
 
-        # add original message as feature 
+        # add original message as feature
         # for all referential order types (2, 3, 4)
         m = self._add_orig_msg_features(
             m,
             modif_fields=['price', 'size', 'time_s', 'time_ns'])
 
-        # order ID is not used by the model
-        m.drop('order_id', axis=1, inplace=True)
+        # order ID is not used by the model (but needed to resolve referential order types)
+        #m.drop('order_id', axis=1, inplace=True)
 
         assert len(m) + 1 == len(b), "length of messages (-1) and book states don't align"
 
