@@ -170,3 +170,4 @@ data/
 
 checkpoints*/
 nohup.out
+tmp/

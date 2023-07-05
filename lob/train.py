@@ -135,6 +135,7 @@ def train(args):
                                               lr_params,
                                               args.num_devices)
         # reinit training loader, so that sequences are initialised with
+        del trainloader
         # different offsets
         trainloader = create_lobster_train_loader(
             lobster_dataset,

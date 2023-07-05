@@ -217,9 +217,12 @@ def sample_pred(
     ) -> jax.Array:
     """ Sample from the top_n predicted labels
     """
-    mask_top_n = mask_n_highest(pred, top_n)
     idx = np.arange(pred.shape[0]).reshape(pred.shape)
-    p = np.exp(pred) * mask_top_n
+    if top_n > 1 and top_n < pred.shape[-1]:
+        mask_top_n = mask_n_highest(pred, top_n)
+        p = np.exp(pred) * mask_top_n
+    else:
+        p = np.exp(pred)
     p = p / p.sum(axis=-1, keepdims=True)
     return jax.random.choice(rng, idx, p=p)
 
