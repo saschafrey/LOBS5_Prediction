@@ -1,9 +1,38 @@
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 import numpy as onp
 from functools import partial
 import matplotlib.pyplot as plt
 
+@jax.jit 
+def wasserstein(p, q, order):
+    # TODO: implement general case with ECDFs where sample sizes are different
+    #       and also multidimensional case
+    assert p.shape == q.shape
+    p = jnp.sort(p)
+    q = jnp.sort(q)
+    return (jnp.sum(jnp.abs(p - q)**order) / p.shape[0])**(1 / order)
+
+wasserstein_vmap = jax.jit(jax.vmap(wasserstein, in_axes=(0, 0, None)))
+
+@jax.jit
+def calc_liquidity(
+        m_raw: jax.Array
+    ) -> Tuple[jax.Array, jax.Array]:
+    EVENT_TYPE_i = 1
+    SIZE_i = 5
+    liq_prov = jnp.where(
+        m_raw[..., EVENT_TYPE_i] == 1,
+        m_raw[..., SIZE_i],
+        0
+    ).cumsum(axis=-1)
+    liq_taken = jnp.where(
+        m_raw[..., EVENT_TYPE_i] > 1,
+        m_raw[..., SIZE_i],
+        0
+    ).cumsum(axis=-1)
+    return liq_prov, liq_taken
 
 @jax.jit
 @jax.vmap
@@ -211,15 +240,27 @@ def event_type_count(
     types = jnp.arange(1, 5)
     return _event_type_count(event_types_data, types)
 
-def plot_order_type_frequency(event_types_gen, event_types_eval):
+def plot_order_type_frequency(event_types_gen, event_types_eval, combine_mod=False):
     """ plot frequency of order types over all runs (all samples and repeats)
     """
     width = 0.4
-    x = onp.array(range(1,5))
+    if combine_mod:
+        x = onp.array(range(1,4))
+        event_types_gen = event_types_gen.at[..., 1].set(
+            event_types_gen[..., 1] + event_types_gen[..., 2])
+        event_types_eval = event_types_eval.at[..., 1].set(
+            event_types_eval[..., 1] + event_types_eval[..., 2])
+        event_types_gen = jnp.delete(event_types_gen, 2, axis=-1)
+        event_types_eval = jnp.delete(event_types_eval, 2, axis=-1)
+        labels = ('new order', 'canc / del', 'execution')
+    else:
+        x = onp.array(range(1,5))
+        labels = ('new order', 'cancel', 'delete', 'execution')
+        
     plt.bar(x-0.2, event_types_gen.sum(axis=(0, 1)), width=width, label='generated')
     plt.bar(x+0.2, event_types_eval.sum(axis=(0, 1)), width=width, label='eval')
+    plt.xticks(x, labels)
     plt.legend()
-    plt.xticks(x, ('new order', 'cancel', 'delete', 'execution'))
     plt.title('Event Type Distribution')
 
 def plot_log_hist(x, label=None):
