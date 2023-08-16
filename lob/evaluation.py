@@ -62,8 +62,6 @@ def mid_price_ret_squ_err(
         act_mid: jax.Array,
         mid_t0: jax.Array,
     ) -> jax.Array:
-    # gen_mid = (gen_l2[:, 0] + gen_l2[:, 2]) / 2.
-    # act_mid = (act_l2[:, 0] + act_l2[:, 2]) / 2.
     gen_ret = (gen_mid - mid_t0) / mid_t0
     act_ret = (act_mid - mid_t0) / mid_t0
     return jnp.square(gen_ret - act_ret)
@@ -117,9 +115,6 @@ def book_vol_comp(
     # turn ask volume negative
     gen_l2 = gen_l2.at[::2, 1].set(-gen_l2[::2, 1])
     act_l2 = act_l2.at[::2, 1].set(-act_l2[::2, 1])
-
-    # p_max = act_l2[-2, 0]
-    # p_min = act_l2[-1, 0]
     
     # sort by price
     gen_l2 = jnp.concatenate([gen_l2[-1: : -2], gen_l2[0: : 2]], axis=0)
@@ -127,16 +122,6 @@ def book_vol_comp(
 
     gen_l2_ = union_price_repr(gen_l2, act_l2)
     act_l2_ = union_price_repr(act_l2, gen_l2)
-
-    # print('gen')
-    # print(gen_l2_.shape)
-    # print(gen_l2_)
-    # print()
-    # print('act')
-    # print(act_l2_.shape)
-    # print(act_l2_)
-    
-    # print(jnp.concatenate([gen_l2_, act_l2_], axis=1))
 
     p_sel_mask = (act_l2_[:, 0] >= p_min) & (act_l2_[:, 0] <= p_max)
     # print(p_sel_mask)
@@ -158,8 +143,6 @@ def book_loss_l1(
         price levels in the union.
     """
     vol_gen, vol_act, n_levels = book_vol_comp(gen_l2, act_l2, n_price_levels)
-    # print(vol_act)
-    # print(vol_gen)
     # sum of L1 losses, divided by number of price levels
     return jnp.abs(vol_act - vol_gen).sum() / (n_levels)
 
@@ -183,12 +166,9 @@ def book_loss_wass(
     # normalize
     vol_gen = vol_gen / jnp.sum(jnp.abs(vol_gen))
     vol_act = vol_act / jnp.sum(jnp.abs(vol_act))
-    # print(jnp.vstack([vol_gen, vol_act]).T)
     # calculate wasserstein distance
     diff = vol_gen - vol_act
-    # print(diff)
     _, ws_i = jax.lax.scan(running_sum, 0, diff)
-    # print(ws_i)
     return jnp.sum(jnp.abs(ws_i))
 
 book_loss_wass_batch = jax.vmap(book_loss_wass, in_axes=(0, None, None))
@@ -197,7 +177,6 @@ book_loss_wass_batch = jax.vmap(book_loss_wass, in_axes=(0, None, None))
 @partial(jax.vmap, in_axes=(1, 1))
 def return_corr(rets_gen, rets_eval):
     corr = jnp.corrcoef(rets_gen, rets_eval, rowvar=False)
-    #return jnp.nan_to_num(corr[0, 1])
     return corr[0, 1]
 
 @partial(jax.jit, static_argnums=(3,4))

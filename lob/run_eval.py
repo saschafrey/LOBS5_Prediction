@@ -135,24 +135,6 @@ sim_queue_len = 100  # per price in sim, how many orders in queue
 
 n_vol_series = 500  # how many book volume series model uses as input
 
-# dataset_obj = LOBSTER(
-#     'lobster',
-#     # data_dir='/nfs/home/peern/LOBS5/data/new_enc/',
-#     data_dir='/nfs/home/peern/LOBS5/data/fast_encoding/',
-#     # use dummy mask function to get entire sequence
-#     mask_fn=lambda X, rng: (X, jnp.array(0)),
-#     use_book_data=True,
-#     # book_transform=True,  # transform book to image
-#     use_simple_book=True,  # return (p,v) book and we'll do transorm to volume image later
-#     msg_seq_len=n_messages + n_eval_messages,
-#     return_raw_msgs=True,
-#     #raw_data_dir='/nfs/home/peern/LOBS5/data/raw/',
-#     n_cache_files=100,  # keep high enough to fit all files in memory
-# )
-# dataset_obj.setup()
-
-# ds = dataset_obj.dataset_test
-
 msg_files = sorted(glob(str(data_dir) + '/*message*.npy'))
 book_files = sorted(glob(str(data_dir) + '/*book*.npy'))
 

@@ -37,11 +37,6 @@ def create_lobster_prediction_dataset(
 	from .lobster_dataloader import LOBSTER
 	name = 'lobster'
 
-	# kwargs = {
-	# 	#'permute': True,
-	# 	"mask_fn": mask_fn
-	# }
-
 	dataset_obj = LOBSTER(
 		name,
 		data_dir=cache_dir,
@@ -62,8 +57,6 @@ def create_lobster_prediction_dataset(
 	#trn_sampler = LOBSTER_Sampler(
 	#		dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	
-	# trn_loader = make_data_loader(
-	# 	dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz, sampler=trn_sampler, num_workers=num_workers)
 	trn_loader = create_lobster_train_loader(
 		dataset_obj, seed, bsz, n_data_workers, reset_train_offsets=False)
 	# NOTE: drop_last=True recompiles the model for a smaller batch size
@@ -90,14 +83,11 @@ def create_lobster_train_loader(dataset_obj, seed, bsz, num_workers, reset_train
 	if reset_train_offsets:
 		dataset_obj.reset_train_offsets()
 	# use sampler to only get individual samples and automatic batching from dataloader
-	# trn_sampler = LOBSTER_Sampler(
-	# 	dataset_obj.dataset_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	trn_loader = make_data_loader(
 		dataset_obj.dataset_train,
 		dataset_obj,
 		seed=seed,
 		batch_size=bsz,
-		#sampler=trn_sampler,
 		shuffle=True,  # TODO: remove later
 		num_workers=num_workers)
 	return trn_loader

@@ -44,23 +44,6 @@ def syntax_validation_matrix(v = None):
     mask = np.zeros((Message_Tokenizer.MSG_LEN, len(v)), dtype=bool)
     mask = mask.at[idx].set(True)
 
-    """
-    # adjustment for positions only allowing subset of field
-    # e.g. +/- at start of price
-    enc_type = 'price'
-    allowed_toks = np.array([v.ENCODING[enc_type]['+'], v.ENCODING[enc_type]['-']])
-    adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
-    i_slice = get_idx_from_field(enc_type)
-    mask = mask.at[slice(i_slice), :].set(adj_col)
-
-    enc_type = 'event_type'
-    # in original event type, only new messages and executions allowed (no cancels or deletions)
-    allowed_toks = np.array([v.ENCODING[enc_type]['1'], v.ENCODING[enc_type]['4']])
-    adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
-    i_slice = get_idx_from_field(enc_type)
-    mask = mask.at[slice(i_slice), :].set(adj_col)
-    """
-
     # adjustment for positions only allowing subset of field
     # e.g. +/- at start of price
     i, _ = get_idx_from_field("price")
@@ -87,9 +70,6 @@ def get_valid_mask(
 
 
 def update_allowed_tok_slice(mask, i, allowed_toks, field_encoder):
-    #field = get_field_from_idx(i)
-    #enc_type = Message_Tokenizer.FIELD_ENC_TYPES[field[0]]
-    #allowed_toks = np.array([v.ENCODING[enc_type][t] for t in allowed_toks])
     allowed_toks = encoding.encode(allowed_toks, *field_encoder)
     adj_col = np.zeros((mask.shape[1],), dtype=bool).at[allowed_toks].set(True)
     mask = mask.at[i, :].set(adj_col)
@@ -118,7 +98,6 @@ def get_field_from_idx(idx):
     return Message_Tokenizer.get_field_from_idx(idx)
 
 def get_idx_from_field(field):
-    #field_i = onp.argwhere(onp.array(Message_Tokenizer.FIELDS) == field).flatten()[0]
     field_i = Message_Tokenizer.FIELD_I[field]
     return LOBSTER_Dataset._get_tok_slice_i(field_i)
 
@@ -279,12 +258,6 @@ def filter_valid_pred(
     ):
     """ Filter the predicted distribution to only include valid tokens
     """
-    # TODO: match shape
-    # pred.shape (1, 12011)
-    # valid_mask.shape (12011,)
-    # np.tile(valid_mask, (pred.shape[0], 1)) (1, 12011)
-
-    #pred = np.where(np.tile(valid_mask, (pred.shape[0], 1)) == 0, -9999, pred)
     if valid_mask.ndim == 1:
         valid_mask = np.expand_dims(valid_mask, axis=0)
     pred = np.where(
@@ -404,10 +377,6 @@ def validate_msg(
     if err:
         print("NAs must be in second half of message")
 
-    # decode message to str repr
-    #msg_str = tok.decode_to_str(msg, vocab).flatten()
-    # time within opening hours
-    #time = int(''.join(msg_str[slice(*get_idx_from_field("time"))]))
     err = time > 57600000000000  # 16 * 3600 * 1e9
     err_count += err
     if err:
@@ -492,12 +461,6 @@ def find_all_msg_occurances(
     
     ref_matches = np.argwhere((seq[:, comp_i_ref] == msg[comp_i,]).all(axis=1))
 
-    # debug("comp_cols_ref", comp_cols_ref)
-    # debug("comp_i_ref", comp_i_ref)
-
-    # debug('searching for (ref)', msg[comp_i,])
-    # debug('in seq', seq[:, comp_i_ref])
-
     if len(ref_matches.flatten()) > 0:
         debug('found ref matches')
     return ref_matches
@@ -537,8 +500,6 @@ def try_find_msg(
     matching_cols = [
         ('event_type', 'direction', 'price', 'size', 'time_s', 'time_ns'),
         ('event_type', 'direction', 'price', 'size'),
-        #('event_type', 'direction', 'price'),
-        #('event_type', 'direction'),
     ]
     n_removed = 0
     for comp_cols in matching_cols:

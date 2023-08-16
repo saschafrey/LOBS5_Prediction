@@ -307,7 +307,6 @@ def get_slices(dims):
 def cross_entropy_loss(logits, label):
     one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[-1])
     return -np.sum(one_hot_label * logits)
-    #return -np.sum(label * logits)
 
 @partial(np.vectorize, signature="(c),()->()")
 def compute_accuracy(logits, label):
@@ -379,7 +378,6 @@ def _prep_batch_par(
     :param in_dim:      (int) dimension of input.
     :return:
     """
-    #print('tracing _prep_batch_par')
 
     assert inputs.shape[1] == seq_len, f'inputs: {inputs.shape} seq_len {seq_len}'
     inputs = one_hot(inputs, in_dim)
@@ -442,7 +440,6 @@ def train_epoch(
     Training function for an epoch that loops over batches.
     """
     # Store Metrics
-    #model = model(training=True)
     batch_losses = []
 
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
@@ -450,14 +447,6 @@ def train_epoch(
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim, num_devices)
-        # print('inputs[0].shape', inputs[0].shape)
-        # print('inputs[1].shape', inputs[1].shape)
-        # print('labels.shape)', labels.shape)
-        # print('integration_times[0].shape', integration_times[0].shape)
-        # print('integration_times[1].shape', integration_times[1].shape)
-        # add device dimension and split batch between devices
-        # inputs, labels, integration_times = device_reshape(
-        #     inputs, labels, integration_times, num_devices)
 
         rng, drop_rng = jax.random.split(rng)
         state, loss = train_step(
@@ -466,9 +455,7 @@ def train_epoch(
             inputs,
             labels,
             integration_times,
-            #model,
             batchnorm,
-            #num_devices,
         )
 
         # losses are already averaged across devices (--> should be all the same here)
@@ -476,26 +463,16 @@ def train_epoch(
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
         state, step = update_learning_rate_per_step(lr_params, state)
 
-        # TODO: remove
-        # if batch_idx == 1000:
-        #     break
-
     # Return average loss over batches
     return state, np.mean(np.array(batch_losses)), step
 
 @partial(
     jax.pmap, backend='gpu',
-    #jax.vmap,
     axis_name="batch_devices",
-    # static_broadcasted_argnums=(1, 7),
     static_broadcasted_argnums=(5,),  # TODO: revert to 5 for batchnorm in pmap
-    #in_axes=(None, None, 0, 0, 0, None))
     in_axes=(0, None, 0, 0, 0, None),
     out_axes=(0, 0))
 def train_step(
-        # params,  # 0
-        # apply_fn,  # 1
-        # batch_stats,  # 2
         state: train_state.TrainState,
         rng: jax.random.PRNGKeyArray,  # 3
         batch_inputs: Tuple[jax.Array, jax.Array], # 4
@@ -506,16 +483,14 @@ def train_step(
     #print('tracing par_loss_and_grad')
     def loss_fn(params):
         if batchnorm:
-            # print(state.batch_stats)
-            # print()
-            logits, mod_vars = state.apply_fn( # state.apply_fn( # model.apply(
+            logits, mod_vars = state.apply_fn( 
                 {"params": params, "batch_stats": state.batch_stats},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates", "batch_stats"],
             )
         else:
-            logits, mod_vars = state.apply_fn( # state.apply_fn( # model.apply(
+            logits, mod_vars = state.apply_fn(
                 {"params": params},
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
@@ -545,9 +520,7 @@ def train_step(
 
 def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_devices, step_rescale=1.0):
     """Validation function that loops over batches"""
-    #model = model(training=False, step_rescale=step_rescale)
     losses, accuracies, preds = np.array([]), np.array([]), np.array([])
-    #split_indices = tuple(onp.cumsum(onp.array(model.output_dims))[:-1])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim, num_devices)
         loss, acc, pred = eval_step(
@@ -561,9 +534,7 @@ def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_device
 @partial(
     jax.pmap,
     axis_name="batch_devices",
-    # static_broadcasted_argnums=(1, 7),
     static_broadcasted_argnums=(4,5),
-    #in_axes=(0, 0, 0, None, None, None))
     in_axes=(0, 0, 0, 0, None, None))
 def eval_step(
         batch_inputs,

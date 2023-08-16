@@ -250,11 +250,6 @@ class FullLobPredModel(nn.Module):
 
         x_m = self.message_out_proj(x_m.T).T
         x_b = self.book_out_proj(x_b.T).T
-        # NOTE: check which axis concat has better performance
-        #       started with axis=0 (works?) [book sequences following message sequences]
-        #       but axis=1 should make more sense [book sequences parallel to message sequences]
-        #                  downside here is linear proj. from 2*H to H in fused_s5
-        #x = jnp.concatenate([x_m, x_b], axis=0)
         x = jnp.concatenate([x_m, x_b], axis=1)
         # TODO: again, check integration time steps make sense here
         x = self.fused_s5(x, jnp.ones(x.shape[0]))
@@ -276,11 +271,6 @@ BatchFullLobPredModel = nn.vmap(
     out_axes=0,
     variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
     split_rngs={"params": False, "dropout": True}, axis_name='batch')
-
-# class ParFullLobPredModel(BatchFullLobPredModel):
-#     @partial(jax.pmap, static_broadcasted_argnums=(0,))
-#     def __call__(self, x_m, x_b, message_integration_timesteps, book_integration_timesteps):
-#         return super().__call__(x_m, x_b, message_integration_timesteps, book_integration_timesteps)
 
 ## Repeat shorter sequences, instead of linear projection:
 

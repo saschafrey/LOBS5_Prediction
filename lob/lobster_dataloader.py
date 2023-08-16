@@ -19,7 +19,6 @@ import jax
 #jax.config.update('jax_platform_name', 'cpu')
 import jax.numpy as jnp
 from jax.nn import one_hot
-# from jax.experimental import sparse
 
 import lob.encoding as encoding
 from lob.encoding import Vocab, Message_Tokenizer
@@ -67,15 +66,6 @@ class LOBSTER_Dataset(Dataset):
             return seq, y
             
         return masking_fn
-
-    # @staticmethod
-    # def random_mask_all(seq, rng):
-    #     """ mask a random token somewhere in the sequence """
-    #     seq = seq.copy()
-    #     i = rng.integers(0, len(seq.flat) - 1)
-    #     y = seq.flat[i]
-    #     seq.flat[i] = Vocab.MASK_TOK
-    #     return seq, y
 
     @staticmethod
     def random_mask(seq, rng, exclude_time=True):
@@ -137,9 +127,6 @@ class LOBSTER_Dataset(Dataset):
             can be predicted in arbitrary order.
         """
         seq = seq.copy()
-        #hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
-        #hidden_fields, msk_field = LOBSTER_Dataset._select_unconditional_mask(rng)
-        # hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask(rng)
         hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask_no_time(rng)
 
         i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
@@ -158,41 +145,6 @@ class LOBSTER_Dataset(Dataset):
             seq = seq.at[-1, slice(*LOBSTER_Dataset._get_tok_slice_i(f))].set(Vocab.HIDDEN_TOK)
         return seq, y
     
-    #@jax.jit
-    # @staticmethod
-    # def causal_mask(seq, rng):
-    #     """ Select random field (e.g price) in most recent message
-    #         for which one token is MSKd (tokens left of MSK are know,
-    #         right of MSK are NA). MSK token becomes prediction target.
-    #         Random subset of other fields are also set to NA.
-    #         This simulates the causal prediction task, where fields
-    #         can be predicted in arbitrary order.
-    #     """
-    #     def get_tok_slice_i(field_i):
-    #         i_start = ([0] + list(Message_Tokenizer.TOK_DELIM))[field_i]
-    #         field_len = Message_Tokenizer.TOK_LENS[field_i]
-    #         return i_start, i_start + field_len
-        
-    #     seq = seq.copy()
-    #     #hidden_fields, msk_field = LOBSTER_Dataset._select_random_causal_mask(rng)
-    #     #hidden_fields, msk_field = LOBSTER_Dataset._select_unconditional_mask(rng)
-    #     hidden_fields, msk_field = LOBSTER_Dataset._select_sequential_causal_mask(rng)
-
-    #     i_start, i_end = LOBSTER_Dataset._get_tok_slice_i(msk_field)
-    #     msk_i = rng.integers(i_start, i_end)
-    #     #msk_i = jax.random.randint(rng, (1,), minval=i_start, maxval=i_end)
-    #     # select random token from last message from selected field
-    #     y = seq[-1][msk_i]
-    #     seq = seq.at[-1, msk_i].set(Vocab.MASK_TOK)
-    #     # set tokens after MSK token to HIDDEN for masked field
-    #     if msk_i < (i_end - 1):
-    #         seq = seq.at[-1, msk_i + 1: i_end].set(Vocab.HIDDEN_TOK)
-    #     # set all hidden_fields to HIDDEN
-    #     for f in hidden_fields:
-    #         seq = seq.at[-1, slice(*get_tok_slice_i(f))].set(
-    #             Vocab.HIDDEN_TOK)
-    #     return seq, y
-
     @staticmethod
     def _select_random_causal_mask(rng):
         """ Select random subset of fields and one field to mask
@@ -243,15 +195,6 @@ class LOBSTER_Dataset(Dataset):
             msk_field += 1
         # hidden_fields, msk_field
         return tuple(range(msk_field + 1, n_fields)), msk_field
-
-    # @staticmethod
-    # def _select_sequential_causal_mask(rng):
-    #     """ Select tokens from start to random field for HID
-    #         followed by one MSK
-    #     """
-    #     n_fields = len(Message_Tokenizer.FIELDS)
-    #     msk_field = jax.random.randint(rng, (1,), minval=0, maxval=n_fields)
-    #     return jnp.arange(msk_field + 1, n_fields, dtype=jnp.int32), msk_field
 
     @staticmethod
     def _get_tok_slice_i(field_i):
@@ -306,8 +249,6 @@ class LOBSTER_Dataset(Dataset):
         self._reset_offsets()
         self._set_book_dims()
 
-        #self._seqs_per_file = np.array(
-        #    [self._get_num_rows(f) - (self.n_messages-1) for f in message_files])
         self._seqs_per_file = np.array(
             [(self._get_num_rows(f) - self.seq_offsets[i]) // n_messages
              for i, f in enumerate(message_files)])
@@ -373,15 +314,10 @@ class LOBSTER_Dataset(Dataset):
         X_raw = jnp.array(X[seq_start: seq_end])
         # encode message
         
-        # if self.return_raw_msgs:
-        #     X = encoding.encode_msgs(X_raw, self.vocab.ENCODING)
-        # else:
-        #     X = X_raw
         X = encoding.encode_msgs(X_raw, self.vocab.ENCODING)
 
         # apply mask and extract prediction target token
         X, y = self.mask_fn(X, self.rng)
-        #X, y = self.mask_fn(X, self.rng_jax)
         X, y = X.reshape(-1), y.reshape(-1)
         # TODO: look into aux_data (could we still use time when available?)
 
@@ -394,8 +330,6 @@ class LOBSTER_Dataset(Dataset):
 
             # tranform from L2 (price volume) representation to fixed volume image 
             if self.book_transform:
-                #book = jax.device_put(book, device=jax.devices("cpu")[0])
-                #book = np.array(transform_L2_state(book, self.book_depth, 100))
                 book = transform_L2_state(book, self.book_depth, 100)
 
             # use raw price, volume series, rather than volume image
@@ -436,8 +370,6 @@ class LOBSTER_Dataset(Dataset):
             self._book_cache[file_idx] = Xb
 
     def _get_num_rows(self, file_path):
-        #with open(file_path) as f:
-        #    return sum(1 for line in f)
         # only load data header and return length
         d = np.load(file_path, mmap_mode='r', allow_pickle=True)
         return d.shape[0]
@@ -447,7 +379,6 @@ class LOBSTER_Dataset(Dataset):
             raise IndexError(f'index {idx} out of range for dataset length ({len(self)})')
         file_idx = np.searchsorted(self._seqs_cumsum, idx+1) - 1
         seq_idx = idx - self._seqs_cumsum[file_idx]
-        #seq_idx = idx - self._seqs_cumsum[file_idx] + self.seq_offsets[file_idx]
         return file_idx, seq_idx
     
 
@@ -558,14 +489,7 @@ class LOBSTER_Subset(Subset):
 
 class LOBSTER(SequenceDataset):
     _name_ = "lobster"
-    #d_input = (
-    #    LOBSTER_Dataset.EVENT_TYPES,
-    #    LOBSTER_Dataset.ORDER_SIZES,
-    #    LOBSTER_Dataset.PRICES,
-    #    2)  # direction
-    #d_output = d_input
     l_output = 0
-    #n_messages = 500
 
     _collate_arg_names = ['book_data'] #['book_data'] #['timesteps']
 
@@ -608,13 +532,11 @@ class LOBSTER(SequenceDataset):
 
     def setup(self):
         self.n_messages = self.msg_seq_len
-        #self.data_dir = default_data_path
         message_files = sorted(glob(str(self.data_dir) + '/*message*.npy'))
         assert len(message_files) > 0, f'no message files found in {self.data_dir}'
         if self.use_book_data:
             # TODO: why does this only work for validation?
             #       can this be variable depending on the dataset?
-            #self._collate_arg_names.append('book_data')
             book_files = sorted(glob(str(self.data_dir) + '/*book*.npy'))
             assert len(message_files) == len(book_files)
         else:
@@ -724,65 +646,6 @@ class LOBSTER(SequenceDataset):
             book_depth=self.book_depth,
             return_raw_msgs=self.return_raw_msgs,
         )
-    #     indices = [i for i in range(len(self.dataset_train)) if i not in self.val_indices]
-    #     # remove the first and last val sequence to avoid overlapping observations
-    #     indices.pop(self.val_indices[0])
-    #     indices.pop(self.val_indices[-1])
-    #     self.dataset_train = LOBSTER_Subset(self.dataset_train, indices)
-    
-    # def split_train_val(self, val_split):
-    #     """ takes one consecutive sequence as validation data,
-    #         dropping the previous and next sequence to avoid overlapping observations
-    #         with the training data.
-    #     """
-    #     rng = random.Random(self.seed)
-    #     indices = list(range(len(self.dataset_train))) #np.arange(len(self.dataset_train))
-    #     val_len = int(np.ceil(val_split * len(indices)))
-        
-    #     # randomly pick validation indices
-    #     #val_indices = [indices.pop(rng.randrange(0, len(indices))) for _ in range(val_len)]
-        
-    #     val_start = rng.randrange(0, len(indices) - val_len)
-    #     self.val_indices = [indices.pop(i) for i in range(val_start, val_start + val_len)]
-    #     # remove previous and subsequent sequence from training data
-    #     # this is to avoid overlapping observations with the validation data
-    #     # when offsets are reset
-    #     if val_start > 0:
-    #         indices.pop(val_start - 1)
-    #     if val_start + val_len < len(indices):
-    #         indices.pop(val_start + val_len)
-
-    #     self.dataset_val = LOBSTER_Subset(self.dataset_train, self.val_indices)
-    #     self.dataset_train = LOBSTER_Subset(self.dataset_train, indices)
-
-    '''
-    def split_train_val(self, val_split):
-        """ splits current dataset_train into separate dataset_train and dataset_val
-            by selecting k_val_segments contiguous folds from the sequence dataset.
-            Sequences with overlapping observations are removed from dataset_train.
-        """
-        #train_len = int(len(self.dataset_train) * (1.0 - val_split))
-        indices = np.arange(len(self.dataset_train))
-        
-        n_segments = int(self.k_val_segments / val_split)
-        folds = np.array_split(indices, n_segments)
-        random.seed(getattr(self, "seed", 42))
-        val_segments = random.sample(range(len(folds)), self.k_val_segments)
-        train_indices = np.hstack(tuple(folds[i] for i in range(n_segments) if i not in val_segments))
-
-        val_indices = np.hstack(tuple(folds[i] for i in val_segments))
-        # remove from training data, those sequences that overlap with validation
-        remove_train = set.union(*[{i+j for j in range(-self.n_messages+1, self.n_messages)} for i in val_indices])
-        train_indices = list(set(train_indices) - remove_train)
-
-        #print('train:', len(train_indices))
-        #print(train_indices[:10])
-        #print('val:', len(val_indices))
-        #print(val_indices[:10])
-
-        self.dataset_val = Subset(self.dataset_train, val_indices)
-        self.dataset_train = Subset(self.dataset_train, train_indices)
-    '''
 
     def __str__(self):
         return f"{'p' if self.permute else 's'}{self._name_}"

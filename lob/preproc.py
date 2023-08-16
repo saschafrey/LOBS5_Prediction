@@ -48,7 +48,6 @@ def transform_L2_state(
     
     # set ask volume to negative (sell orders)
     mybook = mybook.at[price_levels // 2:].set(mybook[price_levels // 2:] * -1)
-    # mybook = jnp.concatenate((delta_p_mid, mybook))
     mybook = jnp.concatenate((
         delta_p_mid.astype(np.float32),
         mybook.astype(np.float32) / 1000
@@ -113,10 +112,6 @@ def process_message_files(
         
         print('<< pre processing >>')
         m_ = tok.preproc(messages, book)
-        #print(m_)
-        # NEW: don't encode in preproce, do it when loading data
-        #print('<< encoding >>')
-        #m_ = encoding.encode_msgs(jnp.array(m_), v.ENCODING)
 
         # save processed messages
         np.save(m_path, m_)
@@ -197,7 +192,6 @@ def process_book(
     ) -> np.ndarray:
 
     # mid-price rounded to nearest tick (100)
-    #p_ref = b[2]
     p_ref = ((b.iloc[:, 0] + b.iloc[:, 2]) / 2).round(-2).astype(int)
     b_indices = b.iloc[:, ::2].sub(p_ref, axis=0).div(100).astype(int)
     b_indices = b_indices + price_levels // 2
@@ -221,7 +215,6 @@ def process_book(
                 mybook[i, price] = vol_book.values[i, j]
 
     # prepend column with best bid changes (in ticks)
-    #bid_diff = b[2].div(100).diff().fillna(0).astype(int).values
     mid_diff = p_ref.div(100).diff().fillna(0).astype(int).values
     return np.concatenate([mid_diff[:, None], mybook], axis=1)
 
