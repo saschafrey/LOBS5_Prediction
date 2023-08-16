@@ -1,8 +1,11 @@
+from datetime import datetime
+from pathlib import Path
 import jax
 import jax.numpy as jnp
 from jax.nn import one_hot
 import flax.linen as nn
 from flax.training.train_state import TrainState
+from lob import train_helpers
 import numpy as onp
 import os
 import sys
@@ -32,7 +35,7 @@ submodule_name = 'AlphaTrade'
 sys.path.append(os.path.join(parent_folder_path, submodule_name))
 from gymnax_exchange.jaxob.jorderbook import OrderBook
 import gymnax_exchange.jaxob.JaxOrderbook as job
-from gym_exchange.environment.base_env.assets.orderflow import OrderIdGenerator
+from gym_exchange.environment.base_env.assets.action import OrderIdGenerator
 
 ORDER_ID_i = 0
 EVENT_TYPE_i = 1
@@ -153,6 +156,7 @@ def get_sim_msg(
         m_seq: jax.Array,
         m_seq_raw: jax.Array,
         sim: OrderBook,
+        mid_price: int,
         #tok: Message_Tokenizer,
         #v: Vocab,
         new_order_id: int,
@@ -184,7 +188,8 @@ def get_sim_msg(
     # NEW LIMIT ORDER
     if event_type == 1:
         sim_msg, msg_corr, raw_dict = get_sim_msg_new(
-            sim,
+            # sim,
+            mid_price,
             event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns, #delta_t, time,
             new_order_id,
             tick_size,
@@ -204,6 +209,7 @@ def get_sim_msg(
                 pred_msg_enc,
                 event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
                 rel_price_ref, quantity_ref, time_s_ref, time_ns_ref,
+                mid_price,
                 m_seq,
                 m_seq_raw,
                 sim,
@@ -218,6 +224,7 @@ def get_sim_msg(
                 pred_msg_enc,
                 event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
                 rel_price_ref, quantity_ref, time_s_ref, time_ns_ref,
+                mid_price,
                 m_seq,
                 m_seq_raw,
                 new_order_id,
@@ -296,7 +303,8 @@ def construct_raw_msg(
 
 @jax.jit
 def get_sim_msg_new(
-        sim: OrderBook,
+        #sim: OrderBook,
+        mid_price: int,
         event_type: int,
         quantity: int,
         side: int,
@@ -317,7 +325,8 @@ def get_sim_msg_new(
         debug('NEW LIMIT ORDER')
         # convert relative to absolute price
         # price = ((sim.get_best_ask() + sim.get_best_bid()) / 2) // 100 * 100 + rel_price * tick_size
-        price = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+        #price = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+        price = mid_price + rel_price * tick_size
 
         sim_msg = construct_sim_msg(
             1,
@@ -437,6 +446,7 @@ def get_sim_msg_mod(
         time_s_ref: int,
         time_ns_ref: int,
 
+        mid_price: int,
         m_seq: jax.Array,
         m_seq_raw: jax.Array,
         sim: OrderBook,
@@ -451,7 +461,8 @@ def get_sim_msg_mod(
 
     # the actual price of the order to be modified
     # p_mod_raw = sim.get_best_bid() + int(modif_part[3]) * tick_size
-    p_mod_raw = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+    # p_mod_raw = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+    p_mod_raw = mid_price + rel_price * tick_size
 
     debug('rel price', rel_price)
     debug('side', side)
@@ -469,9 +480,9 @@ def get_sim_msg_mod(
             or encoding.is_special_val(time_ns_ref):
         debug('NaN ref value found')
         debug('rel_price_ref', rel_price_ref, 'quantity_ref', quantity_ref, 'time_s_ref', time_s_ref, 'time_ns_ref', time_ns_ref)
-        debug('remaining init vol at price', sim.get_init_volume_at_price(side, p_mod_raw), p_mod_raw)
+        debug('remaining init vol at price', job.get_init_volume_at_price(sim.orderbook_array, side, p_mod_raw), p_mod_raw)
         # if no init volume remains at price, discard current message
-        if sim.get_init_volume_at_price(side, p_mod_raw) == 0:
+        if job.get_init_volume_at_price(sim.orderbook_array, side, p_mod_raw) == 0:
             return None, None, None
         order_id = job.INITID
         #orig_msg_found = onp.array((Message_Tokenizer.MSG_LEN // 2) * [Vocab.NA_TOK])
@@ -479,7 +490,7 @@ def get_sim_msg_mod(
     
     # search for original order to get correct ID
     else:
-        if sim.get_volume_at_price(side, p_mod_raw) == 0:
+        if job.get_volume_at_price(sim.orderbook_array, side, p_mod_raw) == 0:
             debug('No volume at given price, discarding...')
             return None, None, None
 
@@ -489,7 +500,11 @@ def get_sim_msg_mod(
         orig_enc = construct_orig_msg_enc(pred_msg_enc, encoder)
         debug('reconstruct. orig_enc \n', orig_enc)
 
-        sim_ids = sim.get_order_ids()
+        # sim_ids = sim.get_order_ids()
+        sim_ids = job.get_order_ids(
+            sim.orderbook_array,
+            sim.price_levels,
+            sim.orderQueueLen)
         debug('sim IDs', sim_ids[sim_ids > 1])
         mask = get_invalid_ref_mask(m_seq_raw, p_mod_raw, sim.get_order_ids())
         orig_i, n_fields_removed = valh.try_find_msg(orig_enc, m_seq, seq_mask=mask)
@@ -497,7 +512,7 @@ def get_sim_msg_mod(
         
         # didn't find matching original message
         if orig_i is None:
-            if sim.get_init_volume_at_price(side, p_mod_raw) == 0:
+            if job.get_init_volume_at_price(sim.orderbook_array, side, p_mod_raw) == 0:
                 debug('No init volume found', side, p_mod_raw)
                 debug(
                     sim.orderbook_array[side][
@@ -526,10 +541,18 @@ def get_sim_msg_mod(
 
     # get remaining quantity in book for given order ID
     debug('looking for order', order_id, 'at price', p_mod_raw)
-    remaining_quantity = sim.get_order_by_id_and_price(order_id, p_mod_raw)[0]
+    remaining_quantity = job.get_order_by_id_and_price(
+        sim.orderbook_array,
+        order_id,
+        p_mod_raw
+    )[0]
     debug('remaining quantity', remaining_quantity)
     if remaining_quantity == -1:
-        remaining_quantity = sim.get_init_volume_at_price(side, p_mod_raw)
+        remaining_quantity = job.get_init_volume_at_price(
+            sim.orderbook_array,
+            side,
+            p_mod_raw
+        )
         debug('remaining init qu.', remaining_quantity)
         # if no init volume remains at price, discard current message
         if remaining_quantity == 0:
@@ -608,6 +631,7 @@ def get_sim_msg_exec(
         time_s_ref: int,
         time_ns_ref: int,
         
+        mid_price: int,
         m_seq: onp.ndarray,
         m_seq_raw: jax.Array,
         new_order_id: int,
@@ -622,7 +646,8 @@ def get_sim_msg_exec(
     REF_LEN = Message_Tokenizer.MSG_LEN - Message_Tokenizer.NEW_MSG_LEN
 
     # the actual price of the order to be modified
-    p_mod_raw = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+    # p_mod_raw = rel_to_abs_price(rel_price, sim.get_best_bid(), sim.get_best_ask(), tick_size)
+    p_mod_raw = mid_price + rel_price * tick_size
 
     debug('event_type:', event_type)
     #assert event_type == 4
@@ -758,8 +783,10 @@ def generate(
         rng: jax.random.PRNGKeyArray,
         sample_top_n: int = 50,
         tick_size: int = 100,
-        #EVAL_MSGS: jax.Array = None,
-    ) -> Tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+        # if eval_msgs given, also returns loss of predictions
+        # e.g. to calculate perplexity
+        m_seq_eval: Optional[jax.Array] = None,  
+    ) -> Tuple[jax.Array, jax.Array, jax.Array, jax.Array, int, jax.Array]:
 
     id_gen = OrderIdGenerator()
     l = Message_Tokenizer.MSG_LEN
@@ -777,13 +804,31 @@ def generate(
     # TODO: remove - try logic with actual eval messages
     # for eval_msg in EVAL_MSGS.reshape((-1, Message_Tokenizer.MSG_LEN)):
     #     m_seq = jnp.concatenate([m_seq[Message_Tokenizer.MSG_LEN: ], eval_msg])
+    if m_seq_eval is not None:
+        m_seq_eval = m_seq_eval.reshape((-1, Message_Tokenizer.MSG_LEN))
+        losses = onp.zeros(m_seq_eval.shape)
 
     time_s_start_i, time_s_end_i = valh.get_idx_from_field('time_s')
     time_ns_start_i, time_ns_end_i = valh.get_idx_from_field('time_ns')
     delta_t_s_start_i, delta_t_s_end_i = valh.get_idx_from_field('delta_t_s')
     delta_t_ns_start_i, delta_t_ns_end_i = valh.get_idx_from_field('delta_t_ns')
 
+    # get current mid price from simulator
+    ask = sim.get_best_ask()
+    bid = sim.get_best_bid()
+    if ask > 0 and bid > 0:
+        p_mid_old = (ask + bid) / 2
+    elif ask < 0 and bid < 0:
+        raise ValueError("No valid ask or bid price in order book")
+    elif ask < 0:
+        p_mid_old = bid + tick_size
+    elif bid < 0:
+        p_mid_old = ask - tick_size
+    # round down to next valid tick
+    p_mid_old = (p_mid_old // tick_size) * tick_size
+
     while n_msg_todo > 0:
+    # for i_message in range(n_msg_todo):
         rng, rng_ = jax.random.split(rng)
 
         # TODO: combine into one call (returning 2 element array)
@@ -792,10 +837,8 @@ def generate(
             encoder
         )
 
-        # jax.block_until_ready(m_seq)
         # roll sequence one step forward
         m_seq = valh.append_hid_msg(m_seq)
-        # jax.block_until_ready(m_seq)
 
         # TODO: calculating time in case where generation is not sequentially left to right
         #       --> check if delta_t complete --> calc time once
@@ -829,7 +872,6 @@ def generate(
                 debug('time_toks', time_s_toks, time_ns_toks)
                 m_seq = m_seq.at[last_start_i + time_s_start_i: last_start_i + time_ns_end_i].set(
                     jnp.hstack([time_s_toks, time_ns_toks]))
-                # jax.block_until_ready(m_seq)
             # skip generation of time tokens
             if (mask_i >= TIME_START_I) and (mask_i < TIME_END_I):
                 continue
@@ -837,9 +879,7 @@ def generate(
             # syntactically valid tokens for current message position
             #valid_mask = valid_mask_array[mask_i]
             valid_mask = valh.get_valid_mask(valid_mask_array, mask_i)
-            # jax.block_until_ready(m_seq)
             m_seq, _ = valh.mask_last_msg_in_seq(m_seq, mask_i)
-            # jax.block_until_ready(m_seq)
             input = (
                 one_hot(
                     jnp.expand_dims(m_seq, axis=0), vocab_len
@@ -850,25 +890,25 @@ def generate(
                 jnp.ones((1, len(m_seq))), 
                 jnp.ones((1, len(b_seq)))
             )
-            # jax.block_until_ready(input)
             logits = valh.predict(
                 input,
                 integration_timesteps, train_state, model, batchnorm)
-            # jax.block_until_ready(logits)
             
             # filter out (syntactically) invalid tokens for current position
             if valid_mask is not None:
                 logits = valh.filter_valid_pred(logits, valid_mask)
-                # jax.block_until_ready(logits)
+
+            # if m_seq_eval is not None:
+            #     # calculate loss for current position
+            #     losses[i_message, mask_i] = train_helpers.cross_entropy_loss(
+            #         logits, m_seq_eval[i_message, mask_i])
+            #     print('loss', losses[i_message, mask_i])
 
             # update sequence
             # note: rng arg expects one element per batch element
             rng, rng_ = jax.random.split(rng)
-            # jax.block_until_ready(m_seq)
             m_seq = valh.fill_predicted_toks(m_seq, logits, sample_top_n, jnp.array([rng_]))
-            # jax.block_until_ready(m_seq)
 
-        # jax.block_until_ready(m_seq)
         debug(m_seq[-l:])
         # TODO: remove (relatively expensive op)
         debug('decoded:')
@@ -883,9 +923,14 @@ def generate(
         #m_seq_raw = m_raw.iloc[end_i - n_messages + 1 : end_i]
         order_id = id_gen.step()
 
-        # jax.block_until_ready(m_seq)
-
         debug(sim.get_L2_state())
+
+        # update mid price if a new one exists (both some buy and sell order in book)
+        ask = sim.get_best_ask()
+        bid = sim.get_best_bid()
+        if ask > 0 and bid > 0:
+            p_mid_old = (ask + bid) / 2
+            p_mid_old = (p_mid_old // tick_size) * tick_size
 
         # parse generated message for simulator, also getting corrected raw message
         # (needs to be encoded and overwrite originally generated message)
@@ -894,8 +939,7 @@ def generate(
             m_seq[:-l],  # sequence without generated message
             m_seq_raw[1:],   # raw data (same length as sequence without generated message)
             sim,
-            #tok,
-            #v,
+            mid_price=p_mid_old.astype(jnp.int32),
             new_order_id=order_id,
             tick_size=tick_size,
             encoder=encoder,
@@ -926,9 +970,6 @@ def generate(
         ])
         debug('new raw msg', encoding.repr_raw_msg(m_seq_raw[-1]))
 
-        p_mid_old = (sim.get_best_ask() + sim.get_best_bid()) / 2
-        p_mid_old = (p_mid_old // tick_size) * tick_size
-        
         # feed message to simulator, updating book state
         _trades = sim.process_order_jnp(sim_msg)
         debug('trades', _trades)
@@ -952,10 +993,143 @@ def generate(
 
         n_msg_todo -= 1
 
-    return m_seq, b_seq, m_seq_raw, jnp.array(l2_book_states), num_errors
+    if m_seq_eval is None:
+        losses = None    
+    return m_seq, b_seq, m_seq_raw, jnp.array(l2_book_states), num_errors, losses
 
 
 ##### NEW
+
+@partial(jax.jit, static_argnums=(3, 4, 5, 6))
+def calc_sequence_losses(
+        m_seq,
+        b_seq,
+        state,
+        model,
+        batchnorm,
+        n_inp_msgs,  # length of input sequence in messages
+        vocab_len,
+        valid_mask_array
+    ):
+    """ Takes a sequence of messages, and calculates cross-entropy loss for each message,
+        based on the next message in the sequence.
+    """
+    @partial(jax.jit, static_argnums=(1,2))
+    def moving_window(a: jax.Array, size: int, stride: int = 1):
+        starts = jnp.arange(0, len(a) - size + 1, stride)
+        return jax.vmap(
+            lambda start: jax.lax.dynamic_slice(
+                a,
+                (start, *jnp.zeros(a.ndim-1, dtype=jnp.int32)),
+                (size, *a.shape[1:])
+            )
+        )(starts)
+    
+    l = Message_Tokenizer.MSG_LEN
+
+    @jax.jit
+    def prep_single_inp(
+            mask_i,
+            na_mask,
+            m_seq,
+            b_seq,
+        ):
+        m_seq = m_seq.copy().reshape((-1, l))
+        last_msg = jnp.where(
+            na_mask,
+            Vocab.HIDDEN_TOK,#Vocab.NA_TOK,
+            m_seq[-1]
+        )
+        m_seq = m_seq.at[-1, :].set(last_msg).reshape(-1)
+        m_seq, y = valh.mask_last_msg_in_seq(m_seq, mask_i)
+        # jax.debug.print('-1 message {m}', m=m_seq[-22:])
+
+        input = (
+            one_hot(
+                #jnp.expand_dims(m_seq, axis=0),
+                m_seq,
+                vocab_len
+            ).astype(jnp.float32),
+            #jnp.expand_dims(b_seq, axis=0)
+            b_seq
+        )
+        integration_timesteps = (
+            # jnp.ones((1, len(m_seq))), 
+            # jnp.ones((1, len(b_seq)))
+            jnp.ones(len(m_seq), dtype=jnp.float32), 
+            jnp.ones(len(b_seq), dtype=jnp.float32)
+            #jnp.ones(len(m_seq))
+        )
+        return input, integration_timesteps, y.astype(jnp.float32)
+    prep_multi_input = jax.vmap(prep_single_inp, in_axes=(0, 0, None, None))
+
+    @jax.jit
+    def single_msg_losses(carry, inp):
+        @partial(jax.jit, static_argnums=(0,))
+        def na_mask_slice(last_non_masked_i):
+            a = jnp.ones((l,), dtype=jnp.bool_)
+            a = a.at[: last_non_masked_i+1].set(False)
+            return a
+
+        m_seq, b_seq, valid_mask = inp
+        mask_idxs = jnp.concatenate([jnp.arange(0, TIME_START_I), jnp.arange(TIME_END_I, l)])
+        na_masks = jnp.array([na_mask_slice(i) for i in range(TIME_START_I)] \
+            + [na_mask_slice(i) for i in range(TIME_END_I, l)])
+
+        bsz = 10
+        assert 2*bsz >= mask_idxs.shape[0], f'bsz:{bsz}; msg len:{mask_idxs.shape[0]}'
+        # split inference into two batches to avoid OOM
+        input, integration_timesteps, y1 = prep_multi_input(mask_idxs[:bsz], na_masks[:bsz], m_seq, b_seq)
+        # print(input[0].shape, input[1].shape, integration_timesteps[0].shape, integration_timesteps[1].shape, y1.shape)
+        logits1 = valh.predict(
+            input,
+            integration_timesteps, state, model, batchnorm)
+        input, integration_timesteps, y2 = prep_multi_input(mask_idxs[-bsz:], na_masks[-bsz:], m_seq, b_seq)
+        logits2 = valh.predict(
+            input,
+            integration_timesteps, state, model, batchnorm)
+        
+        logits = jnp.concatenate([logits1, logits2[2*bsz - mask_idxs.shape[0] : ]], axis=0)
+        y = jnp.concatenate([y1, y2[2*bsz - mask_idxs.shape[0] : ]], axis=0)
+        # jax.debug.print('mask_idxs {x}; y {y}', x=mask_idxs, y=y)
+        # jax.debug.print('m_seq[-1] {x}', x=m_seq[-1])
+        
+        # filter out (syntactically) invalid tokens for current position
+        if valid_mask is not None:
+            # logits shape (16, 12011)
+            # valid_mask shape (22, 12011)
+            # print('logits shape', logits.shape)
+            # print('valid_mask shape', valid_mask.shape)
+            logits = valh.filter_valid_pred(logits, valid_mask)
+
+        # jax.debug.print('logits.shape {x}', x=logits.shape)
+        # jax.debug.print('y.shape {x}', x=y.shape)
+        losses = train_helpers.cross_entropy_loss(logits, y)
+        return carry, losses
+
+    m_seq = m_seq.reshape((-1, l))
+    inputs = (
+        moving_window(m_seq, n_inp_msgs),
+        moving_window(b_seq, n_inp_msgs),
+        jnp.repeat(
+            jnp.expand_dims(
+                jnp.delete(valid_mask_array, slice(TIME_START_I, TIME_END_I), axis=0),
+                axis=0
+            ),
+            m_seq.shape[0] - n_inp_msgs + 1,
+            axis=0
+        )
+    )
+    last_i, losses = jax.lax.scan(
+        single_msg_losses,
+        init=0,
+        xs=inputs
+    )
+    # _, losses = single_msg_losses(
+    #     0,
+    #     (m_seq[:500], b_seq[:500], jnp.array(0))
+    # )
+    return losses
 
 def generate_single_rollout(
         m_seq_inp,
@@ -968,6 +1142,7 @@ def generate_single_rollout(
         batchnorm,
         encoder,
         rng,
+        m_seq_eval = None
     ):
     
     rng, rng_ = jax.random.split(rng)        
@@ -975,7 +1150,7 @@ def generate_single_rollout(
     #sim = inference.copy_orderbook(sim_init)
 
     # generate predictions
-    m_seq_gen, b_seq_gen, m_seq_raw_gen, l2_book_states, err = generate(
+    m_seq_gen, b_seq_gen, m_seq_raw_gen, l2_book_states, err, losses = generate(
     #m_seq_gen, b_seq_gen, m_seq_raw_gen, l2_book_states, err = inference_generate_lp(
         m_seq_inp,
         b_seq_inp,
@@ -988,6 +1163,7 @@ def generate_single_rollout(
         encoder,
         rng_,
         sample_top_n=-1,  # sample from entire distribution
+        #m_seq_eval=m_seq_eval
     )
     # only keep actually newly generated messages
     m_seq_raw_gen = m_seq_raw_gen[-n_gen_msgs:]
@@ -1001,6 +1177,7 @@ def generate_single_rollout(
             #'event_types_eval': eval.event_type_count(m_seq_raw_eval[:, 1]),
             'num_errors': err,
             'l2_book_states': l2_book_states,
+            #'losses': losses,
         }
     )
 
@@ -1044,8 +1221,21 @@ def calculate_rollout_metrics(
         (l2_book_states[:, :, 0] + l2_book_states[:, :, 2]) / 2.,
         axis=0
     )
+    # filter our mid-prices where one side is empty
+    mid_gen = jnp.where(
+        ((l2_book_states[:, :, 0] < 0) | (l2_book_states[:, :, 2] < 0)).any(axis=0),
+        jnp.nan,
+        mid_gen
+    )
     rets_gen = mid_gen / mid_t0 - 1
+    
     mid_eval = (l2_book_states_eval[:, 0] + l2_book_states_eval[:, 2]) / 2.
+    # filter our mid-prices where one side is empty
+    mid_eval = jnp.where(
+        (l2_book_states_eval[:, 0] < 0) | (l2_book_states_eval[:, 2] < 0),
+        jnp.nan,
+        mid_eval
+    )
     rets_eval = mid_eval / mid_t0 - 1
     
     # shape: (n_eval_messages, )
@@ -1136,7 +1326,8 @@ def generate_repeated_rollouts(
         sim_queue_len,
     )
     # book state after initialisation (replayed messages)
-    l2_book_state_init = job.get_l2_state(sim_init.orderbook_array)
+    # l2_book_state_init = job.get_l2_state(sim_init.orderbook_array)
+    l2_book_state_init = sim_init.get_L2_state()
 
     # run actual messages on sim_eval (once) to compare
     sim_eval = copy_orderbook(sim_init)
@@ -1159,6 +1350,7 @@ def generate_repeated_rollouts(
             batchnorm,
             encoder,
             rng,
+            m_seq_eval
         )
         event_types_gen = event_types_gen.at[i].set(rollout_metrics['event_types_gen'])
         event_types_eval = event_types_eval.at[i].set(eval.event_type_count(m_seq_raw_eval[:, 1]))
@@ -1183,11 +1375,12 @@ def generate_repeated_rollouts(
         data_levels
     )
     metrics['l2_book_states'] = l2_book_states
+    metrics['l2_book_states_eval'] = l2_book_states_eval
     metrics['num_errors'] = num_errors
     metrics['event_types_gen'] = event_types_gen
     metrics['event_types_eval'] = event_types_eval
-    metrics['l2_book_states'] = l2_book_states
     metrics['raw_msgs_gen'] = raw_msgs_gen
+    metrics['raw_msgs_eval'] = m_seq_raw_eval
 
     return metrics
 
@@ -1207,6 +1400,7 @@ def sample_messages(
         sim_book_levels: int = 20,
         sim_queue_len: int = 100,
         data_levels: int = 10,
+        save_folder: str = './tmp/'
     ):
 
     rng, rng_ = jax.random.split(rng)
@@ -1218,10 +1412,16 @@ def sample_messages(
 
     all_metrics = []
 
-    # iteratre over all test data
-    #for i in tqdm(range(len(ds))):
+    # create folder if it doesn't exist yet
+    Path(save_folder).mkdir(parents=True, exist_ok=True)
+
     # iterate over random samples
     for i in tqdm(sample_i):
+
+        # check if file already exists
+        if os.path.isfile(save_folder + f'tmp_inference_results_dict_{i}.pkl'):
+            print(f'Skipping existing sample {i}...')
+            continue
         
         print(f'Processing sample {i}...')
 
@@ -1251,7 +1451,7 @@ def sample_messages(
             data_levels
         )
         # save results dict as pickle file
-        with open(f'./tmp/tmp_inference_results_dict_{i}.pkl', 'wb') as f:
+        with open(save_folder + f'/tmp_inference_results_dict_{i}.pkl', 'wb') as f:
             pickle.dump(sequence_metrics, f)
         all_metrics.append(sequence_metrics)
     # combine metrics into single dict

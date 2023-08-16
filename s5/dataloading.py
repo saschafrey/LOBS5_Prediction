@@ -59,7 +59,8 @@ def make_data_loader(dset,
 	# Generate the dataloaders.
 	return torch.utils.data.DataLoader(
 		dataset=dset, collate_fn=collate_fn, batch_size=batch_size, shuffle=shuffle,
-		drop_last=drop_last, generator=rng, sampler=sampler, num_workers=num_workers)
+		drop_last=drop_last, generator=rng, sampler=sampler, num_workers=num_workers)#,
+		# prefetch_factor=3)
 
 
 def create_lra_imdb_classification_dataset(cache_dir: Union[str, Path] = DEFAULT_CACHE_DIR_ROOT,

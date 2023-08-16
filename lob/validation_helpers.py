@@ -235,7 +235,7 @@ def append_hid_msg(seq):
 
 #@chex.chexify
 @jax.jit
-@chex.assert_max_traces(n=1)
+#@chex.assert_max_traces(n=1)
 def mask_last_msg_in_seq(
         seq: jax.Array,
         i: int,
@@ -279,11 +279,19 @@ def filter_valid_pred(
     ):
     """ Filter the predicted distribution to only include valid tokens
     """
-    #pred = pred * valid_mask
     # TODO: match shape
-    #pred = pred.at[np.tile(valid_mask, (pred.shape[0], 1)) == 0].set(-9999)
-    pred = np.where(np.tile(valid_mask, (pred.shape[0], 1)) == 0, -9999, pred)
-    #pred = pred / pred.sum(axis=-1, keepdims=True)
+    # pred.shape (1, 12011)
+    # valid_mask.shape (12011,)
+    # np.tile(valid_mask, (pred.shape[0], 1)) (1, 12011)
+
+    #pred = np.where(np.tile(valid_mask, (pred.shape[0], 1)) == 0, -9999, pred)
+    if valid_mask.ndim == 1:
+        valid_mask = np.expand_dims(valid_mask, axis=0)
+    pred = np.where(
+        valid_mask == 0,
+        -9999,
+        pred,
+    )
     # renormalize
     pred = pred - np.log(np.sum(np.exp(pred), axis=-1, keepdims=True))
     return pred

@@ -171,3 +171,8 @@ data/
 checkpoints*/
 nohup.out
 tmp*/
+figures/
+
+*.pkl
+*.out
+*.prof
