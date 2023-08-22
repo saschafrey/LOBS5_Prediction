@@ -1,14 +1,22 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 authors:
-- family-names: “Smith”
-  given-names: “Jimmy T. H.“
-- family-names: “Warrington”
-  given-names: “Andrew”
-- family-names: “Linderman”
-  given-names: “Scott”
-title: "Simplified State Space Layers for Sequence Modeling"
+- family-names: "Nagy"
+  given-names: "Peer"
+- family-names: "Frey"
+  given-names: "Sascha"
+- family-names: "Sapora"
+  given-names: "Silvia"
+- family-names: "Li"
+  given-names: "Kang"
+- family-names: "Calinescu"
+  given-names: "Anisoara"
+- family-names: "Zohren"
+  given-names: "Stefan"
+- family-names: "Foerster"
+  given-names: "Jakob"
+title: "Generative AI for End-to-End Limit Order Book Modelling: A Token-Level Autoregressive Generative Model of Message Flow Using a Deep State Space Network"
 version: 0.0.1
-doi: arXiv:2208.04933
-url: "https://github.com/lindermanlab/S5"
-date-released: 2022-OCT-04
+doi: arXiv:xxxx.xxxxx
+url: "https://github.com/peernagy/LOBS5"
+date-released: 2023-AUG-22

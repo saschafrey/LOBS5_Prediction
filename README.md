@@ -53,7 +53,7 @@ Paper results and plots are calculated in `lob\ar_pred.ipynb`.
 ## Citation
 Please use the following when citing our work:
 ```
-@misc{nagy2023generative,
+@article{nagy2023generative,
   doi = {},
   url = {https://arxiv.org/abs/xxxx.xxxxx},
   author = {Nagy, Peer and Frey, Sascha and Sapora, Silvia and Li, Kang and Calinescu, Anisoara and Zohren, Stefan and Foerster, Jakob},
