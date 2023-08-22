@@ -55,7 +55,7 @@ import lob.encoding as encoding
 
 ##################################################
 
-# get args from command line to select stock between GOOG, NFLX, INTC
+# get args from command line to select stock between GOOG, INTC
 parser = argparse.ArgumentParser()
 parser.add_argument('--stock', type=str, default='GOOG', help='stock to evaluate')
 args = parser.parse_args()
@@ -64,10 +64,6 @@ if args.stock == 'GOOG':
     ckpt_path = '../checkpoints/treasured-leaf-149_84yhvzjt/' # 0.5 y GOOG, (full model)
     data_dir = '/nfs/home/peern/LOBS5/data/test_set/GOOG/'
     save_dir = '/nfs/home/peern/LOBS5/data/results/GOOG/inference/'
-elif args.stock == 'NFLX':
-    ckpt_path = '../checkpoints/fanciful-grass-151_q36k51ii/' # 0.5 y NFLX, (full model)
-    data_dir = '/nfs/home/peern/LOBS5/data/test_set/NFLX/'
-    save_dir = '/nfs/home/peern/LOBS5/data/results/NFLX/inference/'
 elif args.stock == 'INTC':
     ckpt_path = '../checkpoints/pleasant-cherry-152_i6h5n74c/' # 0.5 y INTC, (full model)
     data_dir = '/nfs/home/peern/LOBS5/data/test_set/INTC/'
