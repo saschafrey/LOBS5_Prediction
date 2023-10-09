@@ -107,7 +107,7 @@ ckpt = load_checkpoint(
     args.__dict__)
 par_state = ckpt['model']
 
-# deduplicate params (they get saved per gpu in training)
+# deduplicate params (get saved per gpu in training)
 state = par_state.replace(
     params=jax.tree_map(lambda x: x[0], par_state.params),
     batch_stats=jax.tree_map(lambda x: x[0], par_state.batch_stats),

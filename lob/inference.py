@@ -198,6 +198,14 @@ def get_sim_msg(
             encoder,
         )
 
+        # invalid if immediately marketable
+        price_abs = sim_msg[PRICE_ABS_i]
+        if ((side == 0 and price_abs <= sim.get_best_bid()) or
+            (side == 1 and price_abs >= sim.get_best_ask())):
+            #sim.get_best_price(1 - side) == price_abs:
+            debug('Invalid new order at', price_abs, 'side', side)
+            return None, None, None
+
     # modification / deletion / execution of existing order
     else:
         rel_price_ref = pred_msg[PRICE_REF_i]
@@ -223,9 +231,9 @@ def get_sim_msg(
         # modify
         elif event_type == 4:
             sim_msg, msg_corr, raw_dict = get_sim_msg_exec(
-                pred_msg_enc,
+                # pred_msg_enc,
                 event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
-                rel_price_ref, quantity_ref, time_s_ref, time_ns_ref,
+                # rel_price_ref, quantity_ref, time_s_ref, time_ns_ref,
                 mid_price,
                 m_seq,
                 m_seq_raw,
@@ -453,7 +461,7 @@ def get_sim_msg_mod(
     debug('rel price', rel_price)
     debug('side', side)
     debug('removed_quantity (raw)', removed_quantity)
-    debug('total liquidity at price', job.get_volume_at_price(side_array, p_mod_raw))
+    debug(f'total liquidity at price {p_mod_raw}', job.get_volume_at_price(side_array, p_mod_raw))
     debug('event_type:', event_type)
 
     # orig order not referenced (no ref given or part missing)
@@ -580,7 +588,7 @@ def get_sim_msg_mod(
 
 
 def get_sim_msg_exec(
-        pred_msg_enc: jnp.ndarray,
+        # pred_msg_enc: jnp.ndarray,
         event_type: int,
         removed_quantity: int,
         side: int,
@@ -590,10 +598,10 @@ def get_sim_msg_exec(
         time_s: int,
         time_ns: int,
 
-        rel_price_ref: int,
-        quantity_ref: int,
-        time_s_ref: int,
-        time_ns_ref: int,
+        # rel_price_ref: int,
+        # quantity_ref: int,
+        # time_s_ref: int,
+        # time_ns_ref: int,
         
         mid_price: int,
         m_seq: onp.ndarray,
@@ -604,8 +612,10 @@ def get_sim_msg_exec(
         encoder: Dict[str, Tuple[jax.Array, jax.Array]],
     ) -> Tuple[Optional[jax.Array], Optional[jax.Array], Optional[jax.Array]]:
 
+    # side of execution: sell order / ask
     if side == 0:
         side_array = sim.asks
+    # buy order / bid
     elif side == 1:
         side_array = sim.bids
     else:
@@ -622,8 +632,8 @@ def get_sim_msg_exec(
     debug('removed_quantity:', removed_quantity)
 
     # get order against which execution is happening
-    # passive_order = sim.orderbook_array[side, 0, 0]
     passive_order = job.get_next_executable_order(int(side), side_array)
+    debug('passive order', passive_order)
     if side == 0:
         debug('   execution on ask side (buyer initiated)')
         debug('   best ask:', passive_order[0])
@@ -631,7 +641,7 @@ def get_sim_msg_exec(
         debug('   execution on bid side (seller initiated)')
         debug('   best bid:', passive_order[0])
     if p_mod_raw != passive_order[0]:
-        debug('EXECUTION AT WRONG PRICE', 'gen:', p_mod_raw, 'p_passive', passive_order[1], 'correcting...')
+        debug('EXECUTION AT WRONG PRICE', 'gen:', p_mod_raw, 'p_passive', passive_order[0], 'correcting...')
         p_mod_raw = passive_order[0]
 
     remaining_quantity = passive_order[1]
@@ -643,13 +653,14 @@ def get_sim_msg_exec(
     # removing more than remaining quantity --> scale down to remaining
     if removed_quantity >= remaining_quantity:
         removed_quantity = remaining_quantity
+        debug('removed_quantity too large. Reduced to', removed_quantity)
 
     debug(f'(event_type={event_type}) -{removed_quantity} from {remaining_quantity} '
           + f'@{p_mod_raw} --> {remaining_quantity-removed_quantity}')
     
     sim_msg = construct_sim_msg(
-        1,
-        1 - side,
+        4,  # type: execution
+        side,  # side of execution
         removed_quantity,
         p_mod_raw,
         new_order_id,
@@ -687,9 +698,12 @@ def get_sim_msg_exec(
             # take ref fields from matching message
             orig_msg_found = onp.array(m_seq[orig_i, -REF_LEN: ])
 
+        # print('found referenced (executed) order', orig_msg_found)
+
     # didn't find correct order (e.g. INITID)
     else:
         orig_msg_found = onp.array(REF_LEN * [Vocab.NA_TOK])
+        print('original / ref.d order not found')
 
     # encode corrected message
     msg_corr = encoding.encode_msg(msg_corr, encoder)[: Message_Tokenizer.NEW_MSG_LEN]
@@ -875,7 +889,10 @@ def generate(
         # order_id = id_gen.step()  # no order ID generator any more in v3 sim?
         order_id = n_msg_todo
 
-        debug(sim.get_L2_state(l2_state_n))
+        current_l2 = sim.get_L2_state(l2_state_n)
+        debug(current_l2)
+        if(current_l2[0] <= current_l2[2]):
+            debug('ERROR: ask price lower than bid price')
 
         # update mid price if a new one exists (both some buy and sell order in book)
         ask = sim.get_best_ask()
@@ -921,7 +938,7 @@ def generate(
 
         # feed message to simulator, updating book state
         _trades = sim.process_order_array(sim_msg)
-        debug('trades', _trades)
+        # debug('trades', _trades)
         p_mid_new = (sim.get_best_ask() + sim.get_best_bid()) / 2
         p_mid_new = (p_mid_new // tick_size) * tick_size
         p_change = ((p_mid_new - p_mid_old) // tick_size).astype(jnp.int32)
@@ -1371,7 +1388,8 @@ def sample_messages(
 
 def generate_impact_rollout(
         side: int,
-        quantity: int,
+        quantity: float,
+        rel_quantity: bool,
         level: int,  # -1: best bid, 0: mid price, 1: best ask
         m_seq: jax.Array,
         b_seq_pv: jax.Array,
@@ -1424,6 +1442,21 @@ def generate_impact_rollout(
     l2_book_state_init = sim_init.get_L2_state(l2_state_n)
     print(l2_book_state_init)
 
+    if rel_quantity:
+        print('rel quantity:', quantity)
+        # get most recent ask and bid size from input series
+        # ask_size, bid_size = b_seq_pv[n_msgs - 1][2], b_seq_pv[n_msgs - 1][4]
+        ask, bid = sim_init.get_best_bid_and_ask_inclQuants()
+        ask_size, bid_size = ask[1], bid[1]
+        print('ask size', ask_size, 'bid size', bid_size)
+        # buy orders trade part of ask size, sell orders part of bid size
+        # always trade at least 1 share
+        quantity = max(1, int(quantity * (ask_size if side == 1 else bid_size)))
+        print('rel quantity --> abs:', quantity)
+    else:
+        quantity = int(quantity)
+        print('abs quantity:', quantity)
+
     # run actual messages on sim_eval (once) to compare
     sim_eval = copy_orderbook(sim_init)
     # convert m_seq_raw_eval to sim_msgs
@@ -1435,62 +1468,100 @@ def generate_impact_rollout(
     # TODO: could mid price be invalid if only one side of book is filled? (one negative value)
     # get mid price at start of generation
     p_mid_old = ((l2_book_state_init[([0, 2],)].mean() // tick_size) * tick_size).astype(jnp.int32)
-    event_type = 1  # new limit order
     new_order_id = 42
     time_init_s = m_seq_raw_inp[-1, DTs_i]
     time_init_ns = m_seq_raw_inp[-1, DTns_i]
     # assume impact message has same timestamp as last message in input sequence
     delta_t_s, delta_t_ns = 0, 0
     time_s, time_ns = time_init_s, time_init_ns
-    print('p_mid_old', p_mid_old)
+    debug('p_mid_old', p_mid_old)
+    # ask side
     if level > 0:
         abs_price = l2_book_state_init[(level - 1)*4]
+    # bid side
     elif level < 0:
         abs_price = l2_book_state_init[(-level + 1)*4 + 2]
     else:
         abs_price = p_mid_old
     rel_price = (abs_price - p_mid_old) // tick_size
-    print('abs_price', abs_price)
-    print('rel_price', rel_price)
-    # construct raw impact message
-    sim_msg, impact_msg, msg_raw = get_sim_msg_new(
-        p_mid_old,
-        event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
-        new_order_id,
-        tick_size,
-        encoder,
-    )
-    # append impact message to message sequence
-    m_seq_inp = jnp.concatenate([m_seq_inp[l:], impact_msg])
-    # append new message to raw data
-    m_seq_raw_inp = jnp.concatenate([
-        m_seq_raw_inp[1:],
-        jnp.expand_dims(msg_raw, axis=0)
-    ])
-    # debug('new raw msg', encoding.repr_raw_msg(m_seq_raw[-1]))
+    debug('abs_price', abs_price)
+    debug('rel_price', rel_price)
 
-    # feed impact message to simulator, updating book state
-    debug('impact msg:', sim_msg)
-    _trades = sim_init.process_order_array(sim_msg)
-    debug('trades', _trades)
-    p_mid_new = (sim_init.get_best_ask() + sim_init.get_best_bid()) // 2
-    p_mid_new = (p_mid_new // tick_size) * tick_size
-    p_change = ((p_mid_new - p_mid_old) // tick_size).astype(jnp.int32)
+    while quantity > 0:
+        # abs_price needs to match best price on other side
+        is_marketable = (side == level) and (abs_price == sim_init.get_best_price(1 - side))
+        # construct impact message
+        if is_marketable:
+            event_type = 4  # new execution message
+            debug('marketable impact message', 'side', side, 'level', level)
+            # construct impact message: execution on opposite side
+            # try to execute as much of quantity as possible
+            sim_msg, impact_msg, msg_raw = get_sim_msg_exec(
+                event_type, quantity, 1 - side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
+                p_mid_old,
+                m_seq,
+                m_seq_raw_inp,
+                new_order_id,
+                sim_init,
+                tick_size,
+                encoder,
+            )
+        else:
+            event_type = 1  # new limit order
+            debug('non-marketable impact message', 'side', side, 'level', level)
+            sim_msg, impact_msg, msg_raw = get_sim_msg_new(
+                p_mid_old,
+                event_type, quantity, side, rel_price, delta_t_s, delta_t_ns, time_s, time_ns,
+                new_order_id,
+                tick_size,
+                encoder,
+            )
 
-    ## AFTER INITIAL IMPACT MESSAGE
+        # reduce quantity by actually transacted quantity (e.g. execution of single order block)
+        debug('msg_raw[SIZE_i]', msg_raw[SIZE_i])
+        quantity -= msg_raw[SIZE_i]
+        debug('left quantity', quantity)
 
-    # get new book state
-    book = sim_init.get_L2_state(l2_state_n)
-    new_book_raw = jnp.concatenate([jnp.array([p_change]), book]).reshape(1,-1)
-    new_book = preproc.transform_L2_state(new_book_raw, 500, 100)
-    # update book sequence
-    b_seq_inp = jnp.concatenate([b_seq_inp[1:], new_book])
+        # print('impact message', msg_raw)
+        debug(encoding.repr_raw_msg(msg_raw))
+
+        # append impact message to message sequence
+        m_seq_inp = jnp.concatenate([m_seq_inp[l:], impact_msg])
+        # append new message to raw data
+        m_seq_raw_inp = jnp.concatenate([
+            m_seq_raw_inp[1:],
+            jnp.expand_dims(msg_raw, axis=0)
+        ])
+        # debug('new raw msg', encoding.repr_raw_msg(m_seq_raw[-1]))
+
+        # feed impact message to simulator, updating book state
+        debug('impact msg:', sim_msg)
+        _trades = sim_init.process_order_array(sim_msg)
+        # debug('trades', _trades)
+        debug(sim_init.get_L2_state(l2_state_n))
+        p_mid_new = (sim_init.get_best_ask() + sim_init.get_best_bid()) // 2
+        p_mid_new = (p_mid_new // tick_size) * tick_size
+        p_change = ((p_mid_new - p_mid_old) // tick_size).astype(jnp.int32)
+
+        # get new book state
+        book = sim_init.get_L2_state(l2_state_n)
+        new_book_raw = jnp.concatenate([jnp.array([p_change]), book]).reshape(1,-1)
+        new_book = preproc.transform_L2_state(new_book_raw, 500, 100)
+        # update book sequence
+        b_seq_inp = jnp.concatenate([b_seq_inp[1:], new_book])
+
+        p_mid_old = p_mid_new
+
+    ## AFTER INITIAL IMPACT MESSAGES
+    debug(m_seq_inp.reshape(-1, l)[-5:])
+    debug(m_seq_raw_inp[-5:])
+    debug(f'INITIAL IMPACT MESSAGES DONE \r\n')
 
     m_seq_gen, b_seq_gen, m_seq_raw_gen, rollout_metrics = generate_single_rollout(
         m_seq_inp,
         b_seq_inp,
         m_seq_raw_inp,
-        n_gen_msgs - 1,  # subtract 1 for the impact msg
+        n_gen_msgs - 1,  # subtract 1 for the impact msg  # TODO: resolve case with multiple impact messages
         copy_orderbook(sim_init),
         train_state,
         model,
@@ -1525,7 +1596,8 @@ def generate_impact_rollout(
 
 def study_impact(
         side: int,
-        quantity: int,
+        quantity: float,
+        rel_quantity: bool,
         rel_price: int,
         n_samples: int,  # draw n random samples from dataset for evaluation
         ds: LOBSTER_Dataset,
@@ -1575,6 +1647,7 @@ def study_impact(
         sequence_metrics = generate_impact_rollout(
             side,
             quantity,
+            rel_quantity,
             rel_price,
             m_seq,
             b_seq_pv,
