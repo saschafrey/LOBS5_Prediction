@@ -33,7 +33,7 @@ if __name__ == "__main__":
 						help="log with wandb?")
 	parser.add_argument("--wandb_project", type=str, default="LOBS5",
 						help="wandb project name")
-	parser.add_argument("--wandb_entity", type=str, default="peer-nagy",
+	parser.add_argument("--wandb_entity", type=str, default="sasrey",
 						help="wandb entity name, e.g. username")
 	parser.add_argument("--dir_name", type=str, default='./data',
 						help="name of directory where data is cached")
@@ -56,6 +56,10 @@ if __name__ == "__main__":
 	parser.add_argument("--restore_step", type=int)
 	parser.add_argument("--msg_seq_len", type=int, default=500,  # 500
 						help="How many past messages to include in each sample")
+	parser.add_argument("--horizon_type", type=str, default='messages', choices=['messages','price-changes'],
+						help="Use n_messages or average number of price-changes to define horizon")
+	parser.add_argument("--prediction_horizon", type=int, default=10,
+						help="How many messages (events) or average price changes into the future to predict")
 	parser.add_argument("--n_data_workers", type=int, default=0,
 		     			help="number of workers used in DataLoader")
 

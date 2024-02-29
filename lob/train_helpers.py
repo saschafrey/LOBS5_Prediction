@@ -446,9 +446,14 @@ def train_epoch(
 
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
+        print(batch)
         inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim, num_devices)
 
         rng, drop_rng = jax.random.split(rng)
+
+
+        print(state)
+
         state, loss = train_step(
             state,
             drop_rng,

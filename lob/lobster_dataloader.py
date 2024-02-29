@@ -366,7 +366,7 @@ class LOBSTER_Dataset(Dataset):
         self._message_cache[file_idx] = Xm
         
         if self.use_book_data:
-            Xb = np.load(self.book_files[file_idx], mmap_mode='r')
+            Xb = np.load(self.book_files[file_idx])
             self._book_cache[file_idx] = Xb
 
     def _get_num_rows(self, file_path):

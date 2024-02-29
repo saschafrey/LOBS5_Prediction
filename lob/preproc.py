@@ -12,6 +12,14 @@ from decimal import Decimal
 from functools import partial
 # import lob.encoding as encoding
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+
+import sys,os
+current_dir=os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir[:current_dir.rfind(os.path.sep)])
+
 from lob.encoding import Vocab, Message_Tokenizer
 
 
@@ -25,7 +33,6 @@ def transform_L2_state(
         book: jax.Array, 
         price_levels: int,
         tick_size: int = 100,
-        #divide_by: int = 1,
     ) -> jax.Array:
     """ Transformation for data loading:
         Converts L2 book state from data to price_levels many volume
@@ -85,7 +92,7 @@ def process_message_files(
         filter_above_lvl: Optional[int] = None,
         skip_existing: bool = False,
     ) -> None:
-
+    #Does the tokenisation of messages and saves to numpy
     v = Vocab()
     tok = Message_Tokenizer()
 
@@ -218,37 +225,82 @@ def process_book(
     mid_diff = p_ref.div(100).diff().fillna(0).astype(int).values
     return np.concatenate([mid_diff[:, None], mybook], axis=1)
 
+def process_fi_2010_files(test_files: list[str],
+                          train_files: list[str],
+                          save_dir: str,
+                          skip_existing: bool = False,):
+    numpy_tests=[]
+    numpy_trains=[]
+    train_path = (save_dir + 
+                  train_files[0].rsplit('/', maxsplit=1)[-1][:train_files[0].rsplit('/', maxsplit=1)[-1].rfind("CF")+2] + 
+                  '_proc.npy')
+    test_path = (save_dir +
+                  test_files[0].rsplit('/', maxsplit=1)[-1][:test_files[0].rsplit('/', maxsplit=1)[-1].rfind("CF")+2] +
+                  '_proc.npy')
+    if skip_existing and Path(test_path).exists() and Path(train_path).exists():
+        print('Skipping fi-2010 files. Already exist')
+        return None
+    
+    for te_f in test_files:
+        np_test=np.loadtxt(te_f)
+        numpy_tests.append(np_test)
+    numpy_test=np.hstack(numpy_tests)
+    for tr_f in train_files:
+        np_train=np.loadtxt(tr_f)
+        numpy_trains.append(np_train)
+    numpy_train=np.hstack(numpy_trains)
+
+    np.save(test_path, numpy_test, allow_pickle=True)
+    np.save(train_path,numpy_train,allow_pickle=True)
+
+    
+    return numpy_test,numpy_train
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default='/nfs/home/peern/LOBS5/data/raw/',
+    parser.add_argument("--data_dir", type=str, default='/data1/sascha/data/raw/',
 		     			help="where to load data from")
-    parser.add_argument("--save_dir", type=str, default='/nfs/home/peern/LOBS5/data/',
+    parser.add_argument("--save_dir", type=str, default='/data1/sascha/data/',
 		     			help="where to save processed data")
-    parser.add_argument("--filter_above_lvl", type=int,
+    parser.add_argument("--filter_above_lvl", type=int, default=10,
                         help="filters down from levels present in the data to specified number of price levels")
     parser.add_argument("--n_tick_range", type=int, default=500,
                         help="how many ticks price series should be calculated")
     parser.add_argument("--skip_existing", action='store_true', default=False)
     parser.add_argument("--messages_only", action='store_true', default=False)
     parser.add_argument("--book_only", action='store_true', default=False)
-    parser.add_argument("--use_raw_book_repr", action='store_true', default=False)
+    parser.add_argument("--representation", type=str, default="raw",choices={"raw","volume-image","order-flow","all"})
+    parser.add_argument("--save-format", type=str, default="numpy",choices={"numpy","parquet"})
+    parser.add_argument("--dataset", type=str, default="lobster",choices={"lobster","fi-2010"})
+
+
     args = parser.parse_args()
 
+    #check to make sure something is being considered.
     assert not (args.messages_only and args.book_only)
+    #fi-2010 dataset only has book data
+    assert not (args.messages_only and (args.dataset=="fi-2010"))
 
-    message_files = sorted(glob(args.data_dir + '*message*.csv'))
-    book_files = sorted(glob(args.data_dir + '*orderbook*.csv'))
+    if args.dataset== "lobster":
+        message_files = sorted(glob(args.data_dir + '*message*.csv'))
+        book_files = sorted(glob(args.data_dir + '*orderbook*.csv'))
+        print('found', len(message_files), 'message files')
+        print('found', len(book_files), 'book files')
+        print()
+    else:
+        test_files=sorted(glob(args.data_dir + 'Test*Dst_NoAuction*.txt'))
+        train_files=sorted(glob(args.data_dir + 'Train*Dst_NoAuction*.txt'))
+        print('found', len(test_files), 'test files')
+        print('found', len(train_files), 'train files')
+        print()
 
-    print('found', len(message_files), 'message files')
-    print('found', len(book_files), 'book files')
-    print()
 
-    if not args.book_only:
+    if not (args.book_only or args.dataset=="fi-2010"):
         print('processing messages...')
         process_message_files(
             message_files,
             book_files,
-            args.save_dir,
+            args.save_dir+'lobster_proc/',
             filter_above_lvl=args.filter_above_lvl,
             skip_existing=args.skip_existing,
         )
@@ -256,17 +308,31 @@ if __name__ == '__main__':
         print('Skipping message processing...')
     print()
     
-    if not args.messages_only:
+    if not (args.messages_only or args.dataset=="fi-2010"):
         print('processing books...')
         process_book_files(
             message_files,
             book_files,
-            args.save_dir,
+            args.save_dir+'lobster_proc/',
             filter_above_lvl=args.filter_above_lvl,
             n_price_series=args.n_tick_range,
             skip_existing=args.skip_existing,
-            use_raw_book_repr=args.use_raw_book_repr,
+            use_raw_book_repr=args.representation,
         )
     else:
         print('Skipping book processing...')
+    print()
+
+    if args.dataset=="fi-2010":
+        print("Processing f1-2010 test and train files...")
+        process_fi_2010_files(
+            test_files=test_files,
+            train_files=train_files,
+            save_dir=args.save_dir+'fi2010_proc/',
+            skip_existing=args.skip_existing,
+        )
+    else:
+        print("Not processing FI-2010 files...")
+    print()
+
     print('DONE')

@@ -14,6 +14,8 @@ from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
     linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
 from s5.ssm import init_S5SSM
 from s5.ssm_init import make_DPLR_HiPPO
+from glob import glob
+
 
 
 def train(args):
@@ -50,24 +52,31 @@ def train(args):
     init_rng, train_rng = random.split(key, num=2)
 
     # Get dataset creation function
-    ds = 'lobster-prediction'
-    #create_dataset_fn =  Datasets[ds]
+    ds = args.dataset
+    create_dataset_fn =  Datasets[ds]
 
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
     mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
+    mask_fn=None if ds=='FI-2010-classification' else mask_fn
+
+    directory=  args.dir_name+'/fi2010_proc'if ds=='FI-2010-classification' else args.dir_name+'/lobster_proc'
+
+
     (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, 
         n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
-        create_lobster_prediction_dataset(
-            args.dir_name,
+        create_dataset_fn(
+            cache_dir=directory,
             seed=args.jax_seed,
             mask_fn=mask_fn,
-            msg_seq_len=args.msg_seq_len,
+            msg_seq_len=args.msg_seq_len, #T 
             bsz=args.bsz,
             use_book_data=args.use_book_data,
             use_simple_book=args.use_simple_book,
             book_transform=args.book_transform,
             n_data_workers=args.n_data_workers,
+            horizon=args.prediction_horizon,
+            horizon_type=args.horizon_type,
         )
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
@@ -124,6 +133,7 @@ def train(args):
 
         print('Training on', args.num_devices, 'devices.')
         train_rng, skey = random.split(train_rng)
+
         state, train_loss, step = train_epoch(state,
                                               skey,
                                               #model_cls,
