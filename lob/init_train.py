@@ -12,7 +12,7 @@ from flax.training import checkpoints
 from flax import linen as nn
 from orbax import checkpoint
 from lob.encoding import Vocab
-from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel, FullLobPredModel#, ParFullLobPredModel
+from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPaddedLobPredModel, FullLobPredModel,BatchBookOnlyPredModel,BookOnlyPredModel#, ParFullLobPredModel
 
 #from lob.lob_seq_model import BatchLobPredModel
 from lob.train_helpers import create_train_state, eval_step, prep_batch, cross_entropy_loss, compute_accuracy
@@ -70,14 +70,14 @@ def load_checkpoint(
 
 def init_train_state(
         args: Namespace,
+        in_dim:int,
         n_classes: int,
         seq_len: int,
         book_dim: int,
         book_seq_len,
         print_shapes=False
-    ) -> Tuple[TrainState, Union[partial[BatchLobPredModel], partial[FullLobPredModel]]]:
+    ) -> Tuple[TrainState, Union[partial[BatchLobPredModel], partial[FullLobPredModel],partial[BatchBookOnlyPredModel]]]:
 
-    in_dim = n_classes
 
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
@@ -134,7 +134,8 @@ def init_train_state(
         clip_eigs=args.clip_eigs,
         bidirectional=args.bidirectional
     )
-    
+    assert not args.use_book_data and args.use_book_only, "'use_book_data implies both messages and book, whilst use_book_only implies book replaces messages.'"
+
     if args.use_book_data:
         # if args.num_devices > 1:
         #     model_cls = ParFullLobPredModel
@@ -154,6 +155,23 @@ def init_train_state(
             n_fused_layers=args.n_layers,
             n_book_pre_layers=args.n_book_pre_layers,
             n_book_post_layers=args.n_book_post_layers,
+            activation=args.activation_fn,
+            dropout=args.p_dropout,
+            mode=args.mode,
+            prenorm=args.prenorm,
+            batchnorm=args.batchnorm,
+            bn_momentum=args.bn_momentum,
+        )
+    elif args.use_book_only:
+        model_cls = partial(
+            BatchBookOnlyPredModel,
+            ssm=ssm_init_fn,
+            d_output=n_classes,
+            d_model=args.d_model,
+            d_book=in_dim,
+            n_book_pre_layers=args.n_book_pre_layers,
+            n_book_post_layers=args.n_book_post_layers,
+            n_fused_layers=args.n_layers,
             activation=args.activation_fn,
             dropout=args.p_dropout,
             mode=args.mode,

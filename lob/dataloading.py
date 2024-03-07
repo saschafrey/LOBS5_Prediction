@@ -129,8 +129,9 @@ def create_FI_2010_classification_dataset(
 	#trn_sampler = LOBSTER_Sampler(
 	#		dataset_obj.datas-et_train, n_files_shuffle=5, batch_size=1, seed=seed)
 	
-	trn_loader = create_fi2010_train_loader(
-		dataset_obj, seed, bsz, n_data_workers)
+	trn_loader = make_data_loader(
+		dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz,
+		shuffle=False, num_workers=n_data_workers)
 	val_loader = make_data_loader(
 		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz,
 		shuffle=False, num_workers=n_data_workers)

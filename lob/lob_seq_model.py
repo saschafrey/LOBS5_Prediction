@@ -377,3 +377,93 @@ BatchPaddedLobPredModel = nn.vmap(
     out_axes=0,
     variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
     split_rngs={"params": False, "dropout": True}, axis_name='batch')
+
+
+class BookOnlyPredModel(nn.Module):
+    ssm: nn.Module
+    d_output: int
+    d_model: int
+    d_book: int
+    n_book_pre_layers: int = 1
+    n_book_post_layers: int = 1
+    n_fused_layers: int = 1
+    activation: str = "gelu"
+    dropout: float = 0.2
+    training: bool = True
+    mode: str = "pool"
+    prenorm: bool = False
+    batchnorm: bool = False
+    bn_momentum: float = 0.9
+    step_rescale: float = 1.0
+
+    def setup(self):
+        """
+        Initializes the S5 stacked encoder and a linear decoder.
+        """
+        self.book_encoder = LobBookModel(
+            ssm=self.ssm,
+            d_book=self.d_book,
+            d_model=self.d_model,
+            n_pre_layers=self.n_book_pre_layers,
+            n_post_layers=self.n_book_post_layers,
+            activation=self.activation,
+            dropout=self.dropout,
+            training=self.training,
+            prenorm=self.prenorm,
+            batchnorm=self.batchnorm,
+            bn_momentum=self.bn_momentum,
+            step_rescale=self.step_rescale,
+        )
+        # applied to transposed book output to get seq len for fusion
+        self.book_out_proj = nn.Dense(self.d_model)
+        self.fused_s5 = StackedEncoderModel(
+            ssm=self.ssm,
+            d_model=self.d_model,
+            n_layers=self.n_fused_layers,
+            activation=self.activation,
+            dropout=self.dropout,
+            training=self.training,
+            prenorm=self.prenorm,
+            batchnorm=self.batchnorm,
+            bn_momentum=self.bn_momentum,
+            step_rescale=self.step_rescale,
+        )
+        self.decoder = nn.Dense(self.d_output)
+
+    def __call__(self, x_b, book_integration_timesteps):
+        """
+        Compute the size d_output log softmax output given a
+        (L_m x d_input, L_b x [P+1]) input sequence tuple,
+        combining message and book inputs.
+        Args:
+             x (float32): 2-tuple of input sequences (L_m x d_input, L_b x [P+1])
+        Returns:
+            output (float32): (d_output)
+        """
+        #x_m, x_b = x
+        # print(x_m.shape, x_b.shape)
+
+        # TODO: check integration time steps make sense here
+        x_b = self.book_encoder(x_b, book_integration_timesteps)
+
+        x_b = self.book_out_proj(x_b)
+        # TODO: again, check integration time steps make sense here
+        x = self.fused_s5(x_b, jnp.ones(x_b.shape[0]))
+
+        if self.mode in ["pool"]:
+            x = jnp.mean(x, axis=0)
+        elif self.mode in ["last"]:
+            x = x[-1]
+        else:
+            raise NotImplementedError("Mode must be in ['pool', 'last]")
+
+        x = self.decoder(x)
+        return nn.log_softmax(x, axis=-1)
+    
+
+BatchBookOnlyPredModel = nn.vmap(
+    BookOnlyPredModel,
+    in_axes=(0, 0),
+    out_axes=0,
+    variable_axes={"params": None, "dropout": None, 'batch_stats': None, "cache": 0, "prime": None},
+    split_rngs={"params": False, "dropout": True}, axis_name='batch')

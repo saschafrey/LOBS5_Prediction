@@ -8,23 +8,28 @@ from lob.lob_seq_model import BatchFullLobPredModel, BatchLobPredModel, BatchPad
 import wandb
 
 from lob.init_train import init_train_state, load_checkpoint
-from lob.dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader
+from lob.dataloading import Datasets, create_lobster_prediction_dataset, create_lobster_train_loader,create_fi2010_train_loader
 from lob.lobster_dataloader import LOBSTER, LOBSTER_Dataset
 from lob.train_helpers import create_train_state, reduce_lr_on_plateau,\
-    linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
+    linear_warmup, cosine_annealing, constant_lr, train_epoch, validate,num_devices_global
 from s5.ssm import init_S5SSM
 from s5.ssm_init import make_DPLR_HiPPO
 from glob import glob
+import jax
+from flax.jax_utils import unreplicate
 
 
 
 def train(args):
     """
     Main function to train over a certain number of epochs
-    """
-
+    """ 
+    assert len(jax.devices())>=args.num_devices , "Asking for more devices than there are GPUs"
+    print("Using the following devices: ",jax.local_devices()[0:args.num_devices])
     best_test_loss = 100000000
     best_test_acc = -10000.0
+    #FIXME: Quite a questionable use of global vars and decorators, might be worth fixing with functions. 
+    num_devices_global=args.num_devices
 
     # for parameter sweep: get args from wandb server
     if args is None:
@@ -57,19 +62,23 @@ def train(args):
 
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
-    mask_fn = LOBSTER_Dataset.causal_mask if args.masking == 'causal' else LOBSTER_Dataset.random_mask
+    mask_fn = (LOBSTER_Dataset.causal_mask 
+               if args.masking == 'causal' 
+               else LOBSTER_Dataset.random_mask)
     mask_fn=None if ds=='FI-2010-classification' else mask_fn
 
-    directory=  args.dir_name+'/fi2010_proc'if ds=='FI-2010-classification' else args.dir_name+'/lobster_proc'
+    processed_data_directory=  (args.dir_name+'/fi2010_proc'
+                                if ds=='FI-2010-classification' 
+                                else args.dir_name+'/lobster_proc')
 
 
     (lobster_dataset, trainloader, valloader, testloader, aux_dataloaders, 
         n_classes, seq_len, in_dim, book_seq_len, book_dim, train_size) = \
         create_dataset_fn(
-            cache_dir=directory,
+            cache_dir=processed_data_directory,
             seed=args.jax_seed,
             mask_fn=mask_fn,
-            msg_seq_len=args.msg_seq_len, #T 
+            msg_seq_len=args.msg_seq_len, 
             bsz=args.bsz,
             use_book_data=args.use_book_data,
             use_simple_book=args.use_simple_book,
@@ -78,12 +87,15 @@ def train(args):
             horizon=args.prediction_horizon,
             horizon_type=args.horizon_type,
         )
+    
+    print(f"[**] The key dimensions are N_Classes: {n_classes}, Sequence length {seq_len}, In dim {in_dim}, book_seq {book_seq_len}, book dim {book_dim}, train set size {train_size}")
 
     print(f"[*] Starting S5 Training on {ds} =>> Initializing...")
 
     state, model_cls = init_train_state(
         args,
         n_classes=n_classes,
+        in_dim=in_dim,
         seq_len=seq_len,
         book_dim=book_dim,
         book_seq_len=book_seq_len,
@@ -147,12 +159,11 @@ def train(args):
         # reinit training loader, so that sequences are initialised with
         del trainloader
         # different offsets
-        trainloader = create_lobster_train_loader(
+        trainloader = create_fi2010_train_loader(
             lobster_dataset,
             int(random.randint(skey, (1,), 0, 100000)),
             args.bsz,
-            num_workers=args.n_data_workers,
-            reset_train_offsets=True)
+            num_workers=args.n_data_workers)
 
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation...")
@@ -197,10 +208,10 @@ def train(args):
                 f"\tTrain Loss: {train_loss:.5f}  --Test Loss: {val_loss:.5f} --"
                 f" Test Accuracy: {val_acc:.4f}"
             )
-
+        
         # save checkpoint
         ckpt = {
-            'model': state,
+            'model': unreplicate(state),
             'config': vars(args),
             'metrics': {
                 'loss_train': train_loss,
@@ -220,7 +231,7 @@ def train(args):
             keep_every_n_steps=10,
             orbax_checkpointer=orbax_checkpointer
         )
-
+        
         # For early stopping purposes
         if val_loss < best_val_loss:
             count = 0

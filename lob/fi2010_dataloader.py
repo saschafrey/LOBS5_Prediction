@@ -59,7 +59,6 @@ class FI2010_Dataset(Dataset):
         """Takes the orderbook features (4x10) and 
         transposes to have rows be events and cols be features.        
         """
-        print(features)
         assert features in ['all','book','derived']
 
         if features == 'book':
@@ -92,7 +91,7 @@ class FI2010_Dataset(Dataset):
         X=jnp.array(x)
         #X=jnp.expand_dims(X,1)
         Y=jnp.array(y)
-        Y=one_hot(Y,num_classes=3)
+        #Y=one_hot(Y,num_classes=3)
         return X,Y
 
     def __len__(self):
@@ -179,7 +178,7 @@ class FI2010(SequenceDataset):
 
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = self.dataset_train.x.shape[-1]
-        self.d_output = 3
+        self.d_output = 1
         # sequence length
         self.L = self.input_length
         # book sequence lengths and dimension (number of levels + 1)

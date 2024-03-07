@@ -10,7 +10,7 @@ import optax
 from typing import Any, Dict, Optional, Tuple, Union
 
 from lob.lob_seq_model import LobPredModel
-
+num_devices_global=1
 
 # LR schedulers
 def linear_warmup(step, base_lr, end_step, lr_min=None):
@@ -50,7 +50,7 @@ def constant_lr(step, base_lr, end_step,  lr_min=None):
     return base_lr
 
 
-def update_learning_rate_per_step(lr_params, state):
+def update_learning_rate_per_step(lr_params, state,num_devices):
     decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min = lr_params
 
     # Get decayed value
@@ -60,16 +60,16 @@ def update_learning_rate_per_step(lr_params, state):
 
     # Update state
     state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'] = \
-        jax_utils.replicate(np.array(lr_val, dtype=np.float32))
+        jax_utils.replicate(np.array(lr_val, dtype=np.float32),jax.local_devices()[0:num_devices])
         
     state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate'] = \
-        jax_utils.replicate(np.array(ssm_lr_val, dtype=np.float32))
+        jax_utils.replicate(np.array(ssm_lr_val, dtype=np.float32),jax.local_devices()[0:num_devices])
 
     if opt_config in ["BandCdecay"]:
         # In this case we are applying the ssm learning rate to B, even though
         # we are also using weight decay on B
         state.opt_state.inner_states['none'].inner_state.hyperparams['learning_rate'] = \
-            jax_utils.replicate(np.array(ssm_lr_val, dtype=np.float32))
+            jax_utils.replicate(np.array(ssm_lr_val, dtype=np.float32),jax.local_devices()[0:num_devices])
 
     return state, step
 
@@ -291,7 +291,7 @@ def create_train_state(model_cls,
         state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     
     # keep copy of state on each device
-    state = jax_utils.replicate(state)
+    state = jax_utils.replicate(state,jax.local_devices()[0:num_devices])
     return state
 
 def get_slices(dims):
@@ -328,7 +328,7 @@ def prep_batch(
         inputs, targets, aux_data = batch
         book_data = aux_data.get("book_data", None)
         timestep_msg = aux_data.get("timesteps_msg", None)
-        timestep_book = aux_data.get("timesteps_book", None)            
+        timestep_book = aux_data.get("timesteps_book", None)
     else:
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
@@ -361,7 +361,8 @@ def prep_batch(
     axis_name="batch_devices",
     static_broadcasted_argnums=(2, 3),
     in_axes=(0, 0, None, None, 0, 0, 0),
-    out_axes=(0, 0, 0))
+    out_axes=(0, 0, 0),
+    devices=jax.local_devices()[0:num_devices_global])
 def _prep_batch_par(
         inputs: jax.Array,
         targets: jax.Array,
@@ -380,7 +381,8 @@ def _prep_batch_par(
     """
 
     assert inputs.shape[1] == seq_len, f'inputs: {inputs.shape} seq_len {seq_len}'
-    inputs = one_hot(inputs, in_dim)
+    #inputs = one_hot(inputs, in_dim)
+    #FIXME: removed one-hot of inputs, needs to evidently return whenever using Tokens. 
 
     # If there is an aux channel containing the integration times, then add that.
     if timestep_msg is not None:
@@ -446,27 +448,24 @@ def train_epoch(
 
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
-        print(batch)
-        inputs, labels, integration_times = prep_batch(batch, seq_len, in_dim, num_devices)
 
+        #batch=batch[0:2]
+        inputs, labels, integration_times =prep_batch(batch, seq_len, in_dim, num_devices)
         rng, drop_rng = jax.random.split(rng)
-
-
-        print(state)
 
         state, loss = train_step(
             state,
-            drop_rng,
+            drop_rng, 
             inputs,
             labels,
             integration_times,
-            batchnorm,
+            batchnorm, 
         )
 
         # losses are already averaged across devices (--> should be all the same here)
         batch_losses.append(loss[0])
         lr_params = (decay_function, ssm_lr, lr, step, end_step, opt_config, lr_min)
-        state, step = update_learning_rate_per_step(lr_params, state)
+        state, step = update_learning_rate_per_step(lr_params, state,num_devices)
 
     # Return average loss over batches
     return state, np.mean(np.array(batch_losses)), step
@@ -475,6 +474,7 @@ def train_epoch(
     jax.pmap, backend='gpu',
     axis_name="batch_devices",
     static_broadcasted_argnums=(5,),  # TODO: revert to 5 for batchnorm in pmap
+    devices=jax.local_devices()[0:num_devices_global],
     in_axes=(0, None, 0, 0, 0, None),
     out_axes=(0, 0))
 def train_step(
@@ -502,11 +502,11 @@ def train_step(
                 mutable=["intermediates"],
             )
 
+
         # average cross-ent loss
         loss = np.mean(cross_entropy_loss(logits, batch_labels))
 
         return loss, (mod_vars, logits)
-
     (loss, (mod_vars, logits)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
     # UPDATE
@@ -540,6 +540,7 @@ def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_device
     jax.pmap,
     axis_name="batch_devices",
     static_broadcasted_argnums=(4,5),
+    devices=jax.local_devices()[0:num_devices_global],
     in_axes=(0, 0, 0, 0, None, None))
 def eval_step(
         batch_inputs,
