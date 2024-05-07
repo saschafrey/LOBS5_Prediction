@@ -341,7 +341,7 @@ class LOBSTER_Dataset(Dataset):
                 # divide volume by 100
                 #book[:, 2::2] = book[:, 2::2] / 100
                 pass
-
+            
             ret_tuple = X, y, book
         else:
             ret_tuple = X, y
@@ -351,7 +351,6 @@ class LOBSTER_Dataset(Dataset):
                 ret_tuple += (X_raw, book_l2_init)
             else:
                 ret_tuple += (X_raw,)
-
         return ret_tuple
 
     def _add_to_cache(self, file_idx):
@@ -490,8 +489,8 @@ class LOBSTER_Subset(Subset):
 class LOBSTER(SequenceDataset):
     _name_ = "lobster"
     l_output = 0
-
-    _collate_arg_names = ['book_data'] #['book_data'] #['timesteps']
+    #FIXME: Needs to be manually changed depending on using aux book data or not... 
+    _collate_arg_names = ['book_data'] #[] #['book_data'] #['timesteps']
 
     @classmethod
     def _collate_fn(cls, batch, *args, **kwargs):

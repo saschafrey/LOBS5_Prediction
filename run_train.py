@@ -62,6 +62,8 @@ if __name__ == "__main__":
 						help="Use n_messages or average number of price-changes to define horizon")
 	parser.add_argument("--prediction_horizon", type=int, default=10,
 						help="How many messages (events) or average price changes into the future to predict")
+	parser.add_argument("--zero_sequences", type=str2bool, default=False,
+		     			help="Whether or not to adjust sequences of data such that initial is 0. Offest-based.")
 	parser.add_argument("--n_data_workers", type=int, default=0,
 		     			help="number of workers used in DataLoader")
 

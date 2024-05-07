@@ -86,6 +86,7 @@ def train(args):
             n_data_workers=args.n_data_workers,
             horizon=args.prediction_horizon,
             horizon_type=args.horizon_type,
+            zero_sequences=args.zero_sequences,
         )
     
     print(f"[**] The key dimensions are N_Classes: {n_classes}, Sequence length {seq_len}, In dim {in_dim}, book_seq {book_seq_len}, book dim {book_dim}, train set size {train_size}")

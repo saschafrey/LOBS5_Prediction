@@ -36,6 +36,7 @@ class FI2010_Dataset(Dataset):
             data,
             pred_horizon, #should be an index in [0,1,2,3,4]
             input_length,
+            zero_sequences: bool = False
             ) -> None:
 
         assert len(data) > 0
@@ -47,13 +48,15 @@ class FI2010_Dataset(Dataset):
         x=self._get_features(data)
         y=self._get_labels(data)
 
-        x,y = self._prepare_ranges(x,y,self.input_length) 
+        x,y = self._prepare_ranges(x,y,self.input_length,zero_sequences) 
         #select which horizon is of interest
         #turn labels of 1,2,3 into 0,1,2 
         y=y[:,pred_horizon]-1
         self.length=len(x)
 
-        self.x,self.y=self._jax_data(x,y)
+        self.x=x
+        self.y=y
+        #self.x,self.y=self._jax_data(x,y)
 
     def _get_features(self,data,features='book'):
         """Takes the orderbook features (4x10) and 
@@ -71,9 +74,9 @@ class FI2010_Dataset(Dataset):
     
     def _get_labels(self,data):
         labels=data[-5:,:].T
-        return labels
+        return np.array(labels)
     
-    def _prepare_ranges(self,X,Y,input_length):
+    def _prepare_ranges(self,X,Y,input_length,zero_sequences):
         [events,features]=X.shape
         dX=np.array(X)
         label=np.array(Y)
@@ -83,14 +86,18 @@ class FI2010_Dataset(Dataset):
                         input_length,
                         features))
         for i in range(input_length,events+1):
-            input[i-input_length] = dX[i-input_length:i ,
-                                       :]
+            offset=np.zeros((1,features))
+            if zero_sequences:
+                offset[:,0::2]=dX[i-input_length,0::2]
+            input[i-input_length] = (dX[i-input_length:i ,:] 
+                                        - offset)
         return input,label
     
     def _jax_data(self,x,y):
-        X=jnp.array(x)
+        print(jax.local_devices())
+        X=jax.device_put(jnp.array(x))
         #X=jnp.expand_dims(X,1)
-        Y=jnp.array(y)
+        Y=jax.device_put(jnp.array(y))
         #Y=one_hot(Y,num_classes=3)
         return X,Y
 
@@ -98,8 +105,11 @@ class FI2010_Dataset(Dataset):
         return self.length
 
     def __getitem__(self, idx):
+        #print("x returned shape", self.x[idx].shape)
+        #print("y returned shape", self.y[idx].shape)
         return self.x[idx], self.y[idx]
-    
+    #def __getitems__ (self, idcs):
+    #    return self.x[jnp.array(idcs)],self.y[jnp.array(idcs)]
 class FI2010(SequenceDataset):
     _name_ = "fi-2010"
     l_output = 0
@@ -142,7 +152,8 @@ class FI2010(SequenceDataset):
             "book_depth": 500,
             "return_raw_msgs": False,
             "horizon": 10,
-            "horizon_type": 'messages'
+            "horizon_type": 'messages',
+            "zero_sequences" : False
         }
 
     def setup(self):
@@ -174,11 +185,12 @@ class FI2010(SequenceDataset):
             data=train_data,
             pred_horizon=horizon_index,
             input_length=self.input_length,
+            zero_sequences=self.zero_sequences
         )
 
         #self.d_input = self.dataset_train.shape[-1]
         self.d_input = self.dataset_train.x.shape[-1]
-        self.d_output = 1
+        self.d_output = 3
         # sequence length
         self.L = self.input_length
         # book sequence lengths and dimension (number of levels + 1)
@@ -189,11 +201,13 @@ class FI2010(SequenceDataset):
             data=val_data,
             pred_horizon=horizon_index,
             input_length=self.input_length,
+            zero_sequences=self.zero_sequences
         )
         self.dataset_test = FI2010_Dataset(
             data=test_data,
             pred_horizon=horizon_index,
             input_length=self.input_length,
+            zero_sequences=self.zero_sequences
         )
 
     def __str__(self):

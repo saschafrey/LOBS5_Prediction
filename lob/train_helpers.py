@@ -10,7 +10,11 @@ import optax
 from typing import Any, Dict, Optional, Tuple, Union
 
 from lob.lob_seq_model import LobPredModel
-num_devices_global=1
+
+
+#FIXME: get rid of horrible globals
+num_devices_global=4
+debug_global=False
 
 # LR schedulers
 def linear_warmup(step, base_lr, end_step, lr_min=None):
@@ -308,6 +312,11 @@ def cross_entropy_loss(logits, label):
     one_hot_label = jax.nn.one_hot(label, num_classes=logits.shape[-1])
     return -np.sum(one_hot_label * logits)
 
+#Can use this if using ints for labels.
+"""@partial(np.vectorize, signature="(c),()->()")
+def cross_entropy_loss(logits, label):
+    return -np.sum(logits[label])"""
+
 @partial(np.vectorize, signature="(c),()->()")
 def compute_accuracy(logits, label):
     return np.argmax(logits) == label
@@ -333,6 +342,8 @@ def prep_batch(
         raise RuntimeError("Err... not sure what I should do... Unhandled data type. ")
 
     # reshape from large batch to multiple device batches
+
+
     inputs, targets, book_data, timestep_msg, timestep_book = device_reshape(
         num_devices,
         inputs,
@@ -449,7 +460,6 @@ def train_epoch(
     #with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
     for batch_idx, batch in enumerate(tqdm(trainloader)):
 
-        #batch=batch[0:2]
         inputs, labels, integration_times =prep_batch(batch, seq_len, in_dim, num_devices)
         rng, drop_rng = jax.random.split(rng)
 
@@ -500,15 +510,23 @@ def train_step(
                 *batch_inputs, *batch_integration_timesteps,
                 rngs={"dropout": rng},
                 mutable=["intermediates"],
-            )
+            )  
+        if debug_global:
+            #jax.debug.print("Params{}", params )
+            jax.debug.print("Batch input {}", batch_inputs )
+            jax.debug.print("Batch int timesteps {}", batch_integration_timesteps)
+            jax.debug.print("batchnorm: {}", batchnorm)
+            jax.debug.print("Logits: {}",logits)
+            jax.debug.print("Labels: {}",batch_labels)
 
 
         # average cross-ent loss
         loss = np.mean(cross_entropy_loss(logits, batch_labels))
-
+        if debug_global:
+            jax.debug.print("Loss: {}",loss)
         return loss, (mod_vars, logits)
     (loss, (mod_vars, logits)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-
+    
     # UPDATE
     # calculate means over device dimension (first)
     loss = jax.lax.pmean(loss, axis_name="batch_devices")
@@ -523,17 +541,17 @@ def train_step(
     #return loss, mod_vars, grads, state
     return state, loss
 
-def validate(state, apply_fn, testloader, seq_len, in_dim, batchnorm, num_devices, step_rescale=1.0):
+def validate(state, apply_fn, valloader, seq_len, in_dim, batchnorm, num_devices, step_rescale=1.0):
     """Validation function that loops over batches"""
-    losses, accuracies, preds = np.array([]), np.array([]), np.array([])
-    for batch_idx, batch in enumerate(tqdm(testloader)):
+    losses, accuracies, preds = [],[],[]
+    for batch_idx, batch in enumerate(tqdm(valloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim, num_devices)
         loss, acc, pred = eval_step(
             inputs, labels, integration_timesteps, state, apply_fn, batchnorm)
-        losses = np.append(losses, loss)
-        accuracies = np.append(accuracies, acc)
+        losses.append(loss)
+        accuracies.append(acc)
 
-    aveloss, aveaccu = np.mean(losses), np.mean(accuracies)
+    aveloss, aveaccu = np.mean(np.array(losses)), np.mean(np.array(accuracies))
     return aveloss, aveaccu
 
 @partial(

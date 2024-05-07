@@ -31,6 +31,8 @@ def create_lobster_prediction_dataset(
 		return_raw_msgs: bool = False,
 		horizon: int = None,
 		horizon_type: str = None,
+		zero_sequences: bool = False,
+
 	) -> ReturnType:
 	""" 
 	"""
@@ -38,6 +40,7 @@ def create_lobster_prediction_dataset(
 	print("[*] Generating LOBSTER Prediction Dataset from", cache_dir)
 	from .lobster_dataloader import LOBSTER
 	name = 'lobster'
+	assert not zero_sequences,  "Zeroing of sequences not implemented for LOBSTER, only FI2010"
 
 	dataset_obj = LOBSTER(
 		name,
@@ -96,6 +99,7 @@ def create_FI_2010_classification_dataset(
 		return_raw_msgs: bool = False,
 		horizon: int = 10,
 		horizon_type: str = 'messages',
+		zero_sequences: bool = False,
 	) -> ReturnType:
 	""" 
 	"""
@@ -120,6 +124,7 @@ def create_FI_2010_classification_dataset(
 		n_cache_files=1e7,  # large number to keep everything in cache
 		return_raw_msgs=return_raw_msgs,
 		pred_horizon=horizon,
+		zero_sequences=zero_sequences,
 	)
 	dataset_obj.setup()
 
@@ -131,7 +136,7 @@ def create_FI_2010_classification_dataset(
 	
 	trn_loader = make_data_loader(
 		dataset_obj.dataset_train, dataset_obj, seed=seed, batch_size=bsz,
-		shuffle=False, num_workers=n_data_workers)
+		shuffle=True, num_workers=n_data_workers)
 	val_loader = make_data_loader(
 		dataset_obj.dataset_val, dataset_obj, seed=seed, batch_size=bsz,
 		shuffle=False, num_workers=n_data_workers)

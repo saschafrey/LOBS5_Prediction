@@ -134,7 +134,7 @@ def init_train_state(
         clip_eigs=args.clip_eigs,
         bidirectional=args.bidirectional
     )
-    assert not args.use_book_data and args.use_book_only, "'use_book_data implies both messages and book, whilst use_book_only implies book replaces messages.'"
+    assert not (args.use_book_data and args.use_book_only), "'use_book_data implies both messages and book, whilst use_book_only implies book replaces messages.'"
 
     if args.use_book_data:
         # if args.num_devices > 1:
