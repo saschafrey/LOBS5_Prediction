@@ -1,3 +1,4 @@
+import os
 from typing import Iterable, Optional, Tuple, Union
 from lob import encoding
 from lob.encoding import Message_Tokenizer, Vocab
@@ -20,7 +21,7 @@ info = lambda *args: logger.info(' '.join((str(arg) for arg in args)))
 
 from lob.lobster_dataloader import LOBSTER_Dataset
 
-v = Vocab()
+
 
 
 def syntax_validation_matrix(v = None):
@@ -90,7 +91,7 @@ def get_masked_idx(seq):
         seq = seq.reshape(-1, Message_Tokenizer.MSG_LEN)
     elif seq.ndim == 2:
         seq = seq.reshape(seq.shape[0], -1, Message_Tokenizer.MSG_LEN)
-    return np.argwhere(seq == v.MASK_TOK)
+    return np.argwhere(seq == Vocab.MASK_TOK)
 
 def get_field_from_idx(idx):
     """ Get the field of a given index (or indices) in a message
@@ -110,6 +111,7 @@ def get_masked_fields(inp_maybe_batched):
 def get_valid_toks_for_field(fields):
     """ Get the valid labels for given fields
     """
+    v=Vocab()
     return tuple(tuple(
         v.DECODING[Message_Tokenizer.FIELD_ENC_TYPES[field]].keys())
           for field in fields)
