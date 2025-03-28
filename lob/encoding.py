@@ -1,3 +1,4 @@
+import os
 from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
@@ -68,7 +69,7 @@ def split_field(x, n_tokens, tok_len, prepend_sign_token=False):
 def combine_field(
         x: jax.Array,
         tok_len: int,
-        sign: jax.Array = jnp.array(1)
+        sign: jax.Array = 1
     ):
     return jax.lax.cond(
         is_special_val(jnp.concatenate((sign.flatten(), x.flatten()))),
